@@ -1,3 +1,4 @@
+using Sentinel.Samples.Common.Chaos;
 using Sentinel.Samples.Payments.Domain;
 
 namespace Sentinel.Samples.Payments;
@@ -26,9 +27,14 @@ public sealed class PaymentProcessor
             ["GBP"] = new("GBP", 2, 43.0m),
         };
 
+    private readonly ChaosRegistry _chaos;
     private readonly ILogger<PaymentProcessor> _logger;
 
-    public PaymentProcessor(ILogger<PaymentProcessor> logger) => _logger = logger;
+    public PaymentProcessor(ChaosRegistry chaos, ILogger<PaymentProcessor> logger)
+    {
+        _chaos = chaos;
+        _logger = logger;
+    }
 
     public CurrencyInfo? FindCurrency(string code) =>
         Currencies.TryGetValue(code, out var info) ? info : null;
@@ -38,8 +44,11 @@ public sealed class PaymentProcessor
         var currency = FindCurrency(currencyCode);
 
         // The guard scenario 5 removes. Without it, the dereference below throws
-        // NullReferenceException for any currency outside the map.
-        if (currency is null)
+        // NullReferenceException for any currency outside the map — a fast failure on the
+        // subset of requests using an unmapped currency, with latency unaffected. The stack
+        // trace names this file and line, which is what source-code-mcp reads during the
+        // investigation.
+        if (currency is null && !_chaos.IsEnabled(ChaosCodes.NullReferenceException))
         {
             _logger.LogWarning(
                 "Order {OrderId} uses unsupported currency {Currency}", orderId, currencyCode);
@@ -54,7 +63,7 @@ public sealed class PaymentProcessor
             };
         }
 
-        var amountInTry = Math.Round(amount * currency.TryRate, currency.MinorUnits);
+        var amountInTry = Math.Round(amount * currency!.TryRate, currency.MinorUnits);
 
         // Amounts above the ceiling are declined. Deterministic, so an evaluation run that
         // expects a decline gets one every time.

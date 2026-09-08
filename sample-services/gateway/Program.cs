@@ -75,7 +75,7 @@ internal sealed record CheckoutItem(string ProductName, int Quantity, decimal Un
 /// </summary>
 internal static class GatewayChaos
 {
-    public const string TimeoutTooLow = "TIMEOUT_TOO_LOW";
+    public const string TimeoutTooLow = ChaosCodes.TimeoutTooLow;
 
     public static readonly ChaosScenario[] All =
     [

@@ -86,9 +86,9 @@ internal sealed record SendNotificationRequest(
 /// </summary>
 internal static class NotificationsChaos
 {
-    public const string MemoryLeak = "MEMORY_LEAK";
-    public const string WrongConnectionString = "WRONG_CONNECTION_STRING";
-    public const string ExternalDependencyUnavailable = "EXTERNAL_DEPENDENCY_UNAVAILABLE";
+    public const string MemoryLeak = ChaosCodes.MemoryLeak;
+    public const string WrongConnectionString = ChaosCodes.WrongConnectionString;
+    public const string ExternalDependencyUnavailable = ChaosCodes.ExternalDependencyUnavailable;
 
     public static readonly ChaosScenario[] All =
     [

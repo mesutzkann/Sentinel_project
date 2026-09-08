@@ -11,6 +11,7 @@ builder.AddSampleServiceDefaults("payments", PaymentsChaos.All);
 builder.AddSampleDbContext<PaymentsDbContext>(PaymentsDbContext.Schema);
 
 builder.Services.AddSingleton<PaymentProcessor>();
+builder.Services.AddSingleton<ChaosBehaviour>();
 
 builder.Services.AddHttpClient<NotificationsClient>(client =>
 {
@@ -50,10 +51,19 @@ app.MapPost("/payments/authorize", async (
     AuthorizeRequest request,
     PaymentsDbContext db,
     PaymentProcessor processor,
+    ChaosBehaviour chaos,
+    ChaosRegistry chaosRegistry,
     NotificationsClient notifications,
     ILogger<Program> logger,
     CancellationToken cancellationToken) =>
 {
+    // Chaos scenario 3 (DB_DEADLOCK). Runs before the payment is written so a lost deadlock
+    // fails the request outright, the way a real one would.
+    if (chaosRegistry.IsEnabled(ChaosCodes.DbDeadlock))
+    {
+        await chaos.ContendForBalancesAsync(db, cancellationToken);
+    }
+
     var payment = processor.Authorize(request.OrderId, request.Amount, request.Currency);
 
     db.Payments.Add(payment);
@@ -88,11 +98,11 @@ internal sealed record AuthorizeRequest(Guid OrderId, decimal Amount, string Cur
 /// </summary>
 internal static class PaymentsChaos
 {
-    public const string Deadlock = "DB_DEADLOCK";
-    public const string NullReference = "NULL_REFERENCE_EXCEPTION";
-    public const string DownstreamLatencyCascade = "DOWNSTREAM_LATENCY_CASCADE";
-    public const string CircuitBreakerStuckOpen = "CIRCUIT_BREAKER_STUCK_OPEN";
-    public const string BadDeploymentRegression = "BAD_DEPLOYMENT_REGRESSION";
+    public const string Deadlock = ChaosCodes.DbDeadlock;
+    public const string NullReference = ChaosCodes.NullReferenceException;
+    public const string DownstreamLatencyCascade = ChaosCodes.DownstreamLatencyCascade;
+    public const string CircuitBreakerStuckOpen = ChaosCodes.CircuitBreakerStuckOpen;
+    public const string BadDeploymentRegression = ChaosCodes.BadDeploymentRegression;
 
     public static readonly ChaosScenario[] All =
     [

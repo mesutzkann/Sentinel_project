@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Sentinel.Samples.Common.Chaos;
@@ -18,11 +19,13 @@ public static class ChaosEndpoints
         group.MapGet("/", (ChaosRegistry registry) => Results.Ok(registry.Snapshot()))
             .WithName("ListChaosScenarios");
 
-        group.MapPost("/{code}/enable", (
+        group.MapPost("/{code}/enable", async (
             string code,
             Dictionary<string, string>? parameters,
             ChaosRegistry registry,
-            ILogger<ChaosRegistry> logger) =>
+            IEnumerable<IChaosActivationHandler> handlers,
+            ILogger<ChaosRegistry> logger,
+            CancellationToken cancellationToken) =>
         {
             if (!registry.Enable(code, parameters))
             {
@@ -33,6 +36,14 @@ public static class ChaosEndpoints
             // has effectively found the answer, which is why agent evaluation reads only the
             // service's own telemetry and never this endpoint.
             logger.LogWarning("Chaos scenario {ChaosCode} enabled", code);
+
+            // Awaited rather than backgrounded: the scenario is only reproducible once its
+            // setup has finished, so enable must not return before then.
+            foreach (var handler in handlers)
+            {
+                await handler.OnEnabledAsync(code, cancellationToken);
+            }
+
             return Results.Ok(registry.Snapshot());
         }).WithName("EnableChaosScenario");
 

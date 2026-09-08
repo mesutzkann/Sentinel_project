@@ -57,7 +57,7 @@ internal sealed record CreateUserRequest(string Email, string FullName);
 /// </summary>
 internal static class UsersChaos
 {
-    public const string RetryStorm = "RETRY_STORM";
+    public const string RetryStorm = ChaosCodes.RetryStorm;
 
     public static readonly ChaosScenario[] All =
     [
