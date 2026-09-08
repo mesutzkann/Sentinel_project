@@ -7,7 +7,7 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 1 of 12.** Foundation and sample services. See
+> **Status: Phase 2 of 12.** Foundation, sample services and observability. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -84,6 +84,37 @@ docker compose --profile core --profile samples up -d --build
 curl http://localhost:8080/api/services/health
 ```
 
+## Observability
+
+```bash
+docker compose --profile core --profile samples --profile observability up -d --build
+```
+
+The five services export traces, metrics and logs over OTLP to one collector, which fans them
+out to Jaeger, Prometheus and Loki. Grafana arrives with all three wired up and a provisioned
+dashboard — nothing is clicked together by hand.
+
+| | | |
+|---|---|---|
+| Grafana | <http://localhost:3000> | `Service Health` dashboard, under the SentinelAI folder |
+| Jaeger | <http://localhost:16686> | one checkout is a five-service trace |
+| Prometheus | <http://localhost:9090> | `job` is the service name, matching `services.metrics_job` |
+| Loki | <http://localhost:3100> | queried by the dashboard, not usually directly |
+
+Break something and watch it show up:
+
+```bash
+# A subset of requests starts failing, latency unaffected.
+curl -X POST http://localhost:8083/chaos/NULL_REFERENCE_EXCEPTION/enable
+curl -X POST http://localhost:8083/payments/authorize   -H 'Content-Type: application/json'   -d '{"order_id":"11111111-1111-1111-1111-111111111111","amount":10,"currency":"JPY"}'
+
+curl -X POST http://localhost:8083/chaos/reset
+```
+
+Five of the fifteen scenarios have their behaviour implemented
+([the catalogue](sample-services/chaos/scenarios.md) marks which); the rest are declared and
+answer `GET /chaos`, with behaviour landing in later phases.
+
 ## Layout
 
 ```text
@@ -102,8 +133,8 @@ docs/             Planning, ADRs, architecture notes
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Foundation: repo, database, sample services, backend, frontend | **Done** |
-| 2 | Observability: OTel, Loki, Prometheus, Jaeger, Grafana, chaos behaviour | Next |
-| 3 | Local LLM provider and structured output | |
+| 2 | Observability: OTel, Loki, Prometheus, Jaeger, Grafana, chaos behaviour | **Done** |
+| 3 | Local LLM provider and structured output | Next |
 | 4 | MCP infrastructure, read-only tools | |
 | 5 | Hybrid RAG | |
 | 6 | Reranker and retrieval evaluation | |

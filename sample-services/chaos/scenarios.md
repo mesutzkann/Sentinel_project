@@ -21,6 +21,16 @@ than guess it:
 4. **A remediable fix.** Each has a concrete fix reachable through a destructive MCP tool, so
    Phase 10 (human-in-the-loop remediation) has something real to execute and verify.
 
+## Implementation status
+
+Scenarios 1–5 have their behaviour implemented and verified end to end against the observability
+stack. The remaining ten are declared — they appear in `GET /chaos` and can be enabled — but
+enabling them does not yet change behaviour; that lands in the phases that need them.
+
+| Implemented | 1, 2, 3, 4, 5 |
+|---|---|
+| Declared only | 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 |
+
 ## Signal legend
 
 `L` Loki logs · `M` Prometheus metrics · `T` Jaeger traces · `D` database-mcp · `G` git-mcp
@@ -281,6 +291,10 @@ POST /chaos/reset              -> disable everything (called before each eval ru
 ```
 
 State is in-memory and per-process, so restarting a service is also a reset.
+
+`enable` runs any setup the scenario needs before it responds, so the call can take a while the
+first time — scenario 2 grows the orders table to two million rows on its first enable. It stays
+idempotent: a second call returns immediately.
 
 ## Ownership
 
