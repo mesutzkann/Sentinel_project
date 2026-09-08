@@ -7,7 +7,7 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 2 of 12.** Foundation, sample services and observability. See
+> **Status: Phase 3 of 12.** Foundation, observability and the local LLM layer. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -115,12 +115,58 @@ Five of the fifteen scenarios have their behaviour implemented
 ([the catalogue](sample-services/chaos/scenarios.md) marks which); the rest are declared and
 answer `GET /chaos`, with behaviour landing in later phases.
 
+## The AI service
+
+Reasoning runs locally through Ollama. Nothing leaves the machine and nothing is billed.
+
+```bash
+ollama pull qwen2.5:3b-instruct        # ~2 GB; the development default
+
+cd ai-service
+python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # Scripts/ -> bin/ on Linux
+.venv/Scripts/uvicorn app.main:app --port 8000
+```
+
+`GET /llm/health` reports whether the runtime is up and has the model, separately from whether
+the service itself is up — those are different questions and a single health check would confuse
+them.
+
+Ask for JSON that matches a schema:
+
+```bash
+curl -X POST http://localhost:8000/llm/structured   -H 'Content-Type: application/json'   -d '{
+    "prompt": "Payments returns 500 on a third of requests with a NullReferenceException in PaymentProcessor.cs.",
+    "prompt_name": "incident_summary",
+    "json_schema": {
+      "type": "object",
+      "properties": {
+        "summary": {"type": "string"},
+        "affected_services": {"type": "array", "items": {"type": "string"}},
+        "suspected_category": {"type": "string",
+          "enum": ["database", "code_defect", "configuration", "dependency", "resource"]},
+        "confidence": {"type": "number"}
+      },
+      "required": ["summary", "affected_services", "suspected_category", "confidence"]
+    }
+  }'
+```
+
+The schema is enforced three ways, weakest last: the model decodes under it, the response is
+parsed out of whatever wrapping the model added, and a validation failure is fed back to the
+model with the specific error before trying again. `enum` is carried all the way through — on a
+3B model that is the difference between `code_defect` and a category it invented.
+
+Every call becomes a `model_predictions` row with its latency and token counts, including calls
+that never produced valid JSON. The AI service does not write that table: it owns the `rag`
+schema, the backend owns `sentinel`, so it reports over the backend's `/internal` API and the
+backend stores it. Both processes read one `INTERNAL_API_KEY`.
+
 ## Layout
 
 ```text
 backend/          ASP.NET Core 8, Clean Architecture (Domain / Application / Infrastructure / Api)
 frontend/         React 19, TypeScript, Vite, Tailwind, TanStack Query, Zustand
-ai-service/       Python FastAPI: agent, RAG, routing, evaluation        (Phase 3+)
+ai-service/       Python FastAPI: local LLM, structured output, prompts (agent and RAG later)
 mcp-servers/      8 MCP servers, one image with different entrypoints    (Phase 4+)
 sample-services/  5 .NET microservices with chaos middleware
 infrastructure/   PostgreSQL init, Prometheus, Grafana, Loki, OTel
@@ -134,8 +180,8 @@ docs/             Planning, ADRs, architecture notes
 |---|---|---|
 | 1 | Foundation: repo, database, sample services, backend, frontend | **Done** |
 | 2 | Observability: OTel, Loki, Prometheus, Jaeger, Grafana, chaos behaviour | **Done** |
-| 3 | Local LLM provider and structured output | Next |
-| 4 | MCP infrastructure, read-only tools | |
+| 3 | Local LLM provider and structured output | **Done** |
+| 4 | MCP infrastructure, read-only tools | Next |
 | 5 | Hybrid RAG | |
 | 6 | Reranker and retrieval evaluation | |
 | 7 | Investigation agent | |
