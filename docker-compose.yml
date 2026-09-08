@@ -1,0 +1,158 @@
+# SentinelAI — local development stack.
+#
+# Profiles keep the footprint small; nothing starts unless you ask for it.
+#   core          PostgreSQL only. Everything Phase 1 needs.
+#   samples       The 5 sample microservices (added in Phase 1, exercised in Phase 2).
+#   observability OTel Collector, Loki, Prometheus, Jaeger, Grafana (Phase 2).
+#   mcp           The MCP servers (Phase 4).
+#
+#   docker compose --profile core up -d
+#   docker compose --profile core --profile samples up -d
+#
+# Memory limits are set deliberately: the whole stack has to fit on a 16 GB laptop.
+
+name: sentinel-ai
+
+x-samples-common: &samples-common
+  profiles: [samples, all]
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment: &samples-env
+    ASPNETCORE_ENVIRONMENT: Development
+    ASPNETCORE_URLS: http://+:8080
+    ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-sentinel};Username=${POSTGRES_USER:-sentinel};Password=${POSTGRES_PASSWORD:-sentinel_dev_pw};Maximum Pool Size=200"
+  mem_limit: 320m
+  healthcheck:
+    test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
+    interval: 15s
+    timeout: 3s
+    retries: 5
+    start_period: 20s
+
+services:
+  # ---------------------------------------------------------------- core ----
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: sentinel-postgres
+    profiles: [core, all]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel_dev_pw}
+      # Deterministic collation so ORDER BY behaves the same everywhere.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    command:
+      # pg_stat_statements is not optional: database-mcp's get_slow_queries reads it,
+      # and scenarios 2 and 4 are unsolvable without it.
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.max=5000"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "max_connections=300"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=8MB"
+      # Anything slower than 200ms lands in the log, which gives logs-mcp a second
+      # independent signal for the slow-query scenarios.
+      - "-c"
+      - "log_min_duration_statement=200"
+      - "-c"
+      - "deadlock_timeout=1s"
+      - "-c"
+      - "log_lock_waits=on"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel} -d ${POSTGRES_DB:-sentinel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ------------------------------------------------------------- samples ----
+  gateway:
+    <<: *samples-common
+    build:
+      context: ./sample-services
+      dockerfile: gateway/Dockerfile
+    container_name: sentinel-gateway
+    environment:
+      <<: *samples-env
+      Services__Users: http://users:8080
+      Services__Orders: http://orders:8080
+      Services__Payments: http://payments:8080
+      Services__Notifications: http://notifications:8080
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      users:
+        condition: service_started
+      orders:
+        condition: service_started
+
+  users:
+    <<: *samples-common
+    build:
+      context: ./sample-services
+      dockerfile: users/Dockerfile
+    container_name: sentinel-users
+    environment:
+      <<: *samples-env
+      Services__Orders: http://orders:8080
+    ports:
+      - "${USERS_PORT:-8081}:8080"
+
+  orders:
+    <<: *samples-common
+    build:
+      context: ./sample-services
+      dockerfile: orders/Dockerfile
+    container_name: sentinel-orders
+    environment:
+      <<: *samples-env
+      Services__Payments: http://payments:8080
+    ports:
+      - "${ORDERS_PORT:-8082}:8080"
+
+  payments:
+    <<: *samples-common
+    build:
+      context: ./sample-services
+      dockerfile: payments/Dockerfile
+    container_name: sentinel-payments
+    environment:
+      <<: *samples-env
+      Services__Notifications: http://notifications:8080
+    ports:
+      - "${PAYMENTS_PORT:-8083}:8080"
+
+  notifications:
+    <<: *samples-common
+    build:
+      context: ./sample-services
+      dockerfile: notifications/Dockerfile
+    container_name: sentinel-notifications
+    ports:
+      - "${NOTIFICATIONS_PORT:-8084}:8080"
+
+volumes:
+  postgres-data:
+    name: sentinel-postgres-data
+
+networks:
+  default:
+    name: sentinel-net

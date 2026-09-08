@@ -1,0 +1,50 @@
+# ---- .NET ----
+bin/
+obj/
+*.user
+*.suo
+[Dd]ebug/
+[Rr]elease/
+TestResults/
+*.trx
+
+# ---- Node / frontend ----
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---- Models (large binaries, never committed) ----
+models/*
+!models/.gitkeep
+!models/**/Modelfile
+*.gguf
+*.safetensors
+*.bin
+
+# ---- Secrets & local config ----
+.env
+.env.local
+*.pfx
+
+# ---- Editors / OS ----
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+Thumbs.db
+Desktop.ini
+
+# ---- Runtime data ----
+infrastructure/**/data/
+logs/

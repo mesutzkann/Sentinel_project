@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "_shared", "_shared", "{A9032652-AB58-422E-839B-671EB2C5C0C1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Common", "_shared\Sentinel.Samples.Common\Sentinel.Samples.Common.csproj", "{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Gateway", "gateway\Sentinel.Samples.Gateway.csproj", "{FE68E080-79D5-46AD-AABA-A5A3AF10B480}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Users", "users\Sentinel.Samples.Users.csproj", "{99259B6F-261B-4636-BD44-246FC40C5721}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Orders", "orders\Sentinel.Samples.Orders.csproj", "{7D858197-86B0-4782-844F-BC0E178F33B7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Payments", "payments\Sentinel.Samples.Payments.csproj", "{B3BE4DE5-AA14-436A-95AF-9CFA977873C0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Notifications", "notifications\Sentinel.Samples.Notifications.csproj", "{B7F45290-1021-4F04-880D-5797369E70DA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FE68E080-79D5-46AD-AABA-A5A3AF10B480}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE68E080-79D5-46AD-AABA-A5A3AF10B480}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE68E080-79D5-46AD-AABA-A5A3AF10B480}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE68E080-79D5-46AD-AABA-A5A3AF10B480}.Release|Any CPU.Build.0 = Release|Any CPU
+		{99259B6F-261B-4636-BD44-246FC40C5721}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{99259B6F-261B-4636-BD44-246FC40C5721}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{99259B6F-261B-4636-BD44-246FC40C5721}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{99259B6F-261B-4636-BD44-246FC40C5721}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D858197-86B0-4782-844F-BC0E178F33B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D858197-86B0-4782-844F-BC0E178F33B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D858197-86B0-4782-844F-BC0E178F33B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D858197-86B0-4782-844F-BC0E178F33B7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B3BE4DE5-AA14-436A-95AF-9CFA977873C0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B3BE4DE5-AA14-436A-95AF-9CFA977873C0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B3BE4DE5-AA14-436A-95AF-9CFA977873C0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B3BE4DE5-AA14-436A-95AF-9CFA977873C0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B7F45290-1021-4F04-880D-5797369E70DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7F45290-1021-4F04-880D-5797369E70DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7F45290-1021-4F04-880D-5797369E70DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7F45290-1021-4F04-880D-5797369E70DA}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00} = {A9032652-AB58-422E-839B-671EB2C5C0C1}
+	EndGlobalSection
+EndGlobal
