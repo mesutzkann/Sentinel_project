@@ -18,8 +18,9 @@ RUN dotnet publish payments/Sentinel.Samples.Payments.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
 WORKDIR /app
 
-RUN adduser -D -u 1001 app
-USER app
+# The .NET 8 runtime images already ship a non-root `app` user and export its id as
+# APP_UID, so creating one here only collides with it.
+USER $APP_UID
 
 COPY --from=build /app/publish .
 
