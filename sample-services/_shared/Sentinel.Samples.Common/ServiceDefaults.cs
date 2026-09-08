@@ -7,8 +7,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Npgsql;
 using Sentinel.Samples.Common.Chaos;
 using Sentinel.Samples.Common.Health;
+using Sentinel.Samples.Common.Telemetry;
 
 namespace Sentinel.Samples.Common;
 
@@ -20,8 +23,8 @@ namespace Sentinel.Samples.Common;
 public static class ServiceDefaults
 {
     /// <summary>
-    /// Wires up JSON conventions, problem details, the chaos registry and health checks.
-    /// OpenTelemetry is added in Phase 2 by <c>AddSentinelTelemetry</c>.
+    /// Wires up JSON conventions, problem details, the chaos registry, health checks and
+    /// OpenTelemetry.
     /// </summary>
     /// <param name="serviceName">
     /// Logical service name, e.g. <c>orders</c>. Must match <c>sentinel.services.name</c> in the
@@ -35,6 +38,17 @@ public static class ServiceDefaults
     {
         builder.Services.AddSingleton(new SampleServiceInfo(serviceName));
         builder.Services.AddSingleton(new ChaosRegistry(scenarios));
+
+        builder.AddSentinelTelemetry(serviceName);
+
+        // EF logs every statement it runs at Information, which would put the text and duration
+        // of each query into Loki. Scenarios 2 and 4 are built on the failing component emitting
+        // no logs at all, so that one default would hand the agent the answer and collapse the
+        // distinction between a log-only investigation and a real multi-signal one. The slow
+        // query is still available where it belongs: PostgreSQL's own
+        // log_min_duration_statement, the Npgsql spans, and pg_stat_statements.
+        builder.Logging.AddFilter(
+            "Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 
         builder.Services.ConfigureHttpJsonOptions(
             options => SampleJson.Apply(options.SerializerOptions));
@@ -64,19 +78,51 @@ public static class ServiceDefaults
             ?? throw new InvalidOperationException(
                 "ConnectionStrings:Postgres is not configured. See .env.example.");
 
-        builder.Services.AddDbContext<TContext>(options =>
-            options.UseNpgsql(connectionString, npgsql =>
-            {
-                // Each sample service owns exactly one schema; its migration history table lives
-                // there too, so the four services never contend over a shared history table.
-                npgsql.MigrationsHistoryTable("__ef_migrations_history", schema);
-            }));
+        builder.Services.AddDbContext<TContext>((serviceProvider, options) =>
+            options.UseNpgsql(
+                ChaosConnectionString(
+                    connectionString, serviceProvider.GetRequiredService<ChaosRegistry>()),
+                npgsql =>
+                {
+                    // Each sample service owns exactly one schema; its migration history table
+                    // lives there too, so the four services never contend over a shared history
+                    // table.
+                    npgsql.MigrationsHistoryTable("__ef_migrations_history", schema);
+                }));
 
         builder.Services.AddHealthChecks()
             .AddCheck<DbConnectivityHealthCheck<TContext>>(
                 "database", tags: ["ready"]);
 
         return builder;
+    }
+
+    /// <summary>
+    /// Applies chaos scenario 1 (DB_CONNECTION_POOL_EXHAUSTION) to the connection string.
+    /// </summary>
+    /// <remarks>
+    /// Lives in the shared layer rather than in orders because the pool belongs to the data
+    /// access setup, not to a request handler. Only orders declares the scenario, and
+    /// <see cref="ChaosRegistry.GetInt"/> returns the fallback for a scenario a service does not
+    /// own, so this is inert everywhere else.
+    ///
+    /// Npgsql pools are keyed by connection string, so a changed string is a different pool: the
+    /// scenario genuinely exhausts one rather than pretending to. The shortened timeout is what
+    /// turns exhaustion into the timeout errors the scenario is recognised by, instead of
+    /// requests queueing for the 15 second default.
+    /// </remarks>
+    private static string ChaosConnectionString(string connectionString, ChaosRegistry chaos)
+    {
+        if (!chaos.IsEnabled(ChaosCodes.DbConnectionPoolExhaustion))
+        {
+            return connectionString;
+        }
+
+        return new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            MaxPoolSize = chaos.GetInt(ChaosCodes.DbConnectionPoolExhaustion, "max_pool_size", 20),
+            Timeout = chaos.GetInt(ChaosCodes.DbConnectionPoolExhaustion, "timeout_seconds", 5),
+        }.ConnectionString;
     }
 
     /// <summary>Maps <c>/health/live</c>, <c>/health/ready</c> and the chaos control endpoints.</summary>
