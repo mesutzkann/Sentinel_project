@@ -10,6 +10,12 @@
 #   docker compose --profile core --profile samples up -d
 #
 # Memory limits are set deliberately: the whole stack has to fit on a 16 GB laptop.
+#
+# Every port is published to 127.0.0.1 rather than 0.0.0.0. The difference matters: Grafana
+# allows anonymous viewers, and Prometheus, Loki and Jaeger have no authentication at all, so
+# publishing on every interface would hand anyone on the same network the telemetry of the whole
+# stack — and, through PostgreSQL, its data. Loopback keeps a development stack on the machine
+# it is being developed on.
 
 name: sentinel-ai
 
@@ -73,7 +79,7 @@ services:
       - "-c"
       - "log_lock_waits=on"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -99,7 +105,7 @@ services:
       Services__Payments: http://payments:8080
       Services__Notifications: http://notifications:8080
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,7 +124,7 @@ services:
       <<: *samples-env
       Services__Orders: http://orders:8080
     ports:
-      - "${USERS_PORT:-8081}:8080"
+      - "127.0.0.1:${USERS_PORT:-8081}:8080"
 
   orders:
     <<: *samples-common
@@ -130,7 +136,7 @@ services:
       <<: *samples-env
       Services__Payments: http://payments:8080
     ports:
-      - "${ORDERS_PORT:-8082}:8080"
+      - "127.0.0.1:${ORDERS_PORT:-8082}:8080"
 
   payments:
     <<: *samples-common
@@ -142,7 +148,7 @@ services:
       <<: *samples-env
       Services__Notifications: http://notifications:8080
     ports:
-      - "${PAYMENTS_PORT:-8083}:8080"
+      - "127.0.0.1:${PAYMENTS_PORT:-8083}:8080"
 
   notifications:
     <<: *samples-common
@@ -151,7 +157,7 @@ services:
       dockerfile: notifications/Dockerfile
     container_name: sentinel-notifications
     ports:
-      - "${NOTIFICATIONS_PORT:-8084}:8080"
+      - "127.0.0.1:${NOTIFICATIONS_PORT:-8084}:8080"
 
   # ------------------------------------------------------- observability ----
   # One ingress for every signal. Services speak OTLP to the collector and nothing else, so
@@ -165,8 +171,8 @@ services:
     volumes:
       - ./infrastructure/otel-collector/config.yml:/etc/otel/config.yml:ro
     ports:
-      - "${OTLP_GRPC_PORT:-4317}:4317"
-      - "${OTLP_HTTP_PORT:-4318}:4318"
+      - "127.0.0.1:${OTLP_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
     depends_on:
       - loki
       - jaeger
@@ -183,7 +189,7 @@ services:
       - ./infrastructure/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki-data:/loki
     ports:
-      - "${LOKI_PORT:-3100}:3100"
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
@@ -207,7 +213,7 @@ services:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null 2>&1"]
@@ -228,7 +234,7 @@ services:
       SPAN_STORAGE_TYPE: memory
       MEMORY_MAX_TRACES: "20000"
     ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
     mem_limit: 512m
 
   grafana:
@@ -250,7 +256,7 @@ services:
       - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
       - loki
