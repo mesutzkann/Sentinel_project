@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DBEDF351-3A8B-4B68-AF26-F9B7CB1F82FC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Domain", "src\Sentinel.Domain\Sentinel.Domain.csproj", "{B5945147-45A6-47F7-BC40-935B927ECF2A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Application", "src\Sentinel.Application\Sentinel.Application.csproj", "{2D3799DA-CCE2-447C-A15A-312A2BA76865}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Infrastructure", "src\Sentinel.Infrastructure\Sentinel.Infrastructure.csproj", "{559CCB22-FC49-4F2C-8712-DD9D97D6F660}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Api", "src\Sentinel.Api\Sentinel.Api.csproj", "{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{20F29AEA-14BD-4A3A-BC0A-8911E563F8B1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.UnitTests", "tests\Sentinel.UnitTests\Sentinel.UnitTests.csproj", "{522AD117-12D7-4B77-A185-B4E6CA5F7D1C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.IntegrationTests", "tests\Sentinel.IntegrationTests\Sentinel.IntegrationTests.csproj", "{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B5945147-45A6-47F7-BC40-935B927ECF2A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B5945147-45A6-47F7-BC40-935B927ECF2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B5945147-45A6-47F7-BC40-935B927ECF2A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B5945147-45A6-47F7-BC40-935B927ECF2A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2D3799DA-CCE2-447C-A15A-312A2BA76865}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D3799DA-CCE2-447C-A15A-312A2BA76865}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2D3799DA-CCE2-447C-A15A-312A2BA76865}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2D3799DA-CCE2-447C-A15A-312A2BA76865}.Release|Any CPU.Build.0 = Release|Any CPU
+		{559CCB22-FC49-4F2C-8712-DD9D97D6F660}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{559CCB22-FC49-4F2C-8712-DD9D97D6F660}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{559CCB22-FC49-4F2C-8712-DD9D97D6F660}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{559CCB22-FC49-4F2C-8712-DD9D97D6F660}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{522AD117-12D7-4B77-A185-B4E6CA5F7D1C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{522AD117-12D7-4B77-A185-B4E6CA5F7D1C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{522AD117-12D7-4B77-A185-B4E6CA5F7D1C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{522AD117-12D7-4B77-A185-B4E6CA5F7D1C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{B5945147-45A6-47F7-BC40-935B927ECF2A} = {DBEDF351-3A8B-4B68-AF26-F9B7CB1F82FC}
+		{2D3799DA-CCE2-447C-A15A-312A2BA76865} = {DBEDF351-3A8B-4B68-AF26-F9B7CB1F82FC}
+		{559CCB22-FC49-4F2C-8712-DD9D97D6F660} = {DBEDF351-3A8B-4B68-AF26-F9B7CB1F82FC}
+		{FC7E9A00-76C4-43A0-AD23-862AD9F8B5F5} = {DBEDF351-3A8B-4B68-AF26-F9B7CB1F82FC}
+		{522AD117-12D7-4B77-A185-B4E6CA5F7D1C} = {20F29AEA-14BD-4A3A-BC0A-8911E563F8B1}
+		{BF0B7F3D-06C1-4532-A1E8-C333A60A7E09} = {20F29AEA-14BD-4A3A-BC0A-8911E563F8B1}
+	EndGlobalSection
+EndGlobal
