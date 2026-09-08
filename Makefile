@@ -19,8 +19,10 @@ backend:
 frontend:
 	cd frontend && npm run dev
 
+# postgres lives in the core profile, and every sample depends on it, so both profiles
+# have to be named or compose rejects the project.
 samples:
-	docker compose --profile samples up -d --build
+	docker compose --profile core --profile samples up -d --build
 
 build:
 	dotnet build backend/Sentinel.sln --warnaserror
