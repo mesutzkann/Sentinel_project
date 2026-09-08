@@ -1,0 +1,31 @@
+# Prometheus scrapes the OTel Collector rather than the services themselves. The services push
+# OTLP to the collector, so there is one place that knows about metrics and one scrape target
+# instead of nine.
+
+global:
+  # Chaos scenarios are evaluated over windows of a few minutes, so a 10s interval gives an
+  # error-rate series enough points to be meaningful without much storage.
+  scrape_interval: 10s
+  evaluation_interval: 15s
+  external_labels:
+    stack: sentinel-ai
+
+scrape_configs:
+  - job_name: otel-collector
+    # The collector already labels every series with the job and instance it came from, derived
+    # from service.name. Without honor_labels Prometheus would rename those to exported_job and
+    # exported_instance and stamp its own job on top, so `job="orders"` — the value the backend
+    # stores as services.metrics_job — would match nothing.
+    honor_labels: true
+    static_configs:
+      - targets: ['otel-collector:8889']
+
+  # The collector's own health. If this goes quiet, missing service metrics are a collector
+  # problem rather than a service problem — a distinction the agent has to be able to make.
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ['otel-collector:8888']
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

@@ -23,6 +23,10 @@ x-samples-common: &samples-common
     ASPNETCORE_ENVIRONMENT: Development
     ASPNETCORE_URLS: http://+:8080
     ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-sentinel};Username=${POSTGRES_USER:-sentinel};Password=${POSTGRES_PASSWORD:-sentinel_dev_pw};Maximum Pool Size=200"
+    # gRPC on 4317, which is the OTel .NET SDK's default protocol. Set SAMPLES_OTLP_ENDPOINT to
+    # an empty value to run the samples without the observability profile: the exporter is then
+    # disabled rather than retrying forever against a collector that is not there.
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${SAMPLES_OTLP_ENDPOINT-http://otel-collector:4317}
   mem_limit: 320m
   healthcheck:
     test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
@@ -149,9 +153,122 @@ services:
     ports:
       - "${NOTIFICATIONS_PORT:-8084}:8080"
 
+  # ------------------------------------------------------- observability ----
+  # One ingress for every signal. Services speak OTLP to the collector and nothing else, so
+  # Loki, Prometheus and Jaeger are swappable without touching a service.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: sentinel-otel-collector
+    profiles: [observability, all]
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./infrastructure/otel-collector/config.yml:/etc/otel/config.yml:ro
+    ports:
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - loki
+      - jaeger
+    mem_limit: 320m
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: sentinel-loki
+    profiles: [observability, all]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yml"]
+    user: "0:0"
+    volumes:
+      - ./infrastructure/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: sentinel-prometheus
+    profiles: [observability, all]
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Matches Loki's retention: an investigation never looks further back than this.
+      - "--storage.tsdb.retention.time=48h"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.64.0
+    container_name: sentinel-jaeger
+    profiles: [observability, all]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # In-memory storage: traces live as long as the container, which is longer than any
+      # investigation window and costs no disk.
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "20000"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+    mem_limit: 512m
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: sentinel-grafana
+    profiles: [observability, all]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # Local single-user stack; the sign-in page adds nothing but a click.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+    mem_limit: 384m
+
 volumes:
   postgres-data:
     name: sentinel-postgres-data
+
+  loki-data:
+    name: sentinel-loki-data
+
+  prometheus-data:
+    name: sentinel-prometheus-data
+
+  grafana-data:
+    name: sentinel-grafana-data
 
 networks:
   default:

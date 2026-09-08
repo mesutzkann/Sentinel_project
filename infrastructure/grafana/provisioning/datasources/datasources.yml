@@ -1,0 +1,44 @@
+# Provisioned so a fresh `docker compose up` lands on a Grafana that already works. Nothing here
+# is clicked together by hand, which is what makes the stack reproducible.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 10s
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Turns the trace_id carried on every log line into a link into Jaeger, which is the
+      # log -> trace jump an on-call engineer makes constantly and the agent mirrors.
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          url: '$${__value.raw}'
+          datasourceUid: jaeger
+
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -2m
+        spanEndTimeShift: 2m
+        filterByTraceID: true
+        tags:
+          - key: service.name
+            value: service_name

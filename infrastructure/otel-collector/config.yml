@@ -1,0 +1,74 @@
+# The single ingress for every signal. Services speak OTLP to this collector and nothing else,
+# so swapping Loki, Prometheus or Jaeger later is a change here rather than in nine services.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # First in every pipeline: on a 16 GB laptop the collector must shed load rather than take the
+  # rest of the stack down with it.
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local
+        action: upsert
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Loki 3 ingests OTLP natively, so no promtail and no log-shipping sidecar.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+  # Pull rather than push: Prometheus scrapes this endpoint. resource_to_telemetry_conversion
+  # promotes service.name to a `service_name` label, which is the key every agent metric query
+  # groups by.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/jaeger]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/loki]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]
+
+  telemetry:
+    logs:
+      level: warn
+    # The collector's own health, scraped by Prometheus. If service metrics go quiet, this is
+    # what separates "the collector is down" from "the service stopped emitting".
+    metrics:
+      address: 0.0.0.0:8888
+      level: normal

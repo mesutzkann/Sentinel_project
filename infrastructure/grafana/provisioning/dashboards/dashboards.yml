@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: SentinelAI
+    orgId: 1
+    folder: SentinelAI
+    type: file
+    disableDeletion: false
+    # The JSON files are the source of truth. Editing a panel in the browser is not persisted,
+    # which is the intended trade: the dashboard is part of the repository, not of someone's
+    # Grafana instance.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
