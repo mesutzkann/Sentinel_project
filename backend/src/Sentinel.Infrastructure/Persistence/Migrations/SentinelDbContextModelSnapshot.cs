@@ -624,7 +624,7 @@ namespace Sentinel.Infrastructure.Persistence.Migrations
                     b.HasIndex("InvestigationId");
 
                     b.HasIndex("IsDestructive")
-                        .HasFilter("is_destructive = true");
+                        .HasFilter("\"IsDestructive\" = true");
 
                     b.HasIndex("StepId");
 

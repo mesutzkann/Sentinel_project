@@ -13,7 +13,13 @@ public sealed class Incident
     /// Human-facing identifier, <c>INC-00042</c>. Assigned by
     /// <c>sentinel.next_incident_code()</c> so concurrent inserts cannot collide.
     /// </summary>
-    public string IncidentCode { get; set; } = string.Empty;
+    /// <remarks>
+    /// Left at the CLR default rather than <c>string.Empty</c>: EF omits a generated column from
+    /// the INSERT only when the property still holds that default, and an empty string would be
+    /// written instead of the sequence value — which the unique index then rejects on the second
+    /// incident. EF populates this from the RETURNING clause once the row is inserted.
+    /// </remarks>
+    public string IncidentCode { get; set; } = null!;
 
     public Guid ServiceId { get; set; }
 

@@ -588,7 +588,7 @@ namespace Sentinel.Infrastructure.Persistence.Migrations
                 schema: "sentinel",
                 table: "tool_calls",
                 column: "IsDestructive",
-                filter: "is_destructive = true");
+                filter: "\"IsDestructive\" = true");
 
             migrationBuilder.CreateIndex(
                 name: "IX_tool_calls_StepId",

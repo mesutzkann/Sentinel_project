@@ -21,7 +21,9 @@ public sealed class ToolCallConfiguration : IEntityTypeConfiguration<ToolCall>
         // Agent evaluation asks "which tools did the agent use for this scenario", and the
         // remediation audit asks "show me every destructive call".
         builder.HasIndex(t => new { t.Tool, t.CalledAt });
-        builder.HasIndex(t => t.IsDestructive).HasFilter("is_destructive = true");
+        // Quoted because the column keeps EF's PascalCase default while the table is
+        // renamed to snake_case, so an unquoted identifier folds to "is_destructive".
+        builder.HasIndex(t => t.IsDestructive).HasFilter("\"IsDestructive\" = true");
 
         builder.HasOne(t => t.Investigation)
             .WithMany(i => i.ToolCallRecords)
