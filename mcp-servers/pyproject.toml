@@ -1,0 +1,58 @@
+[project]
+name = "sentinel-mcp-servers"
+version = "0.1.0"
+description = "SentinelAI MCP servers: the agent's read access to logs, metrics, traces, the database, git and source."
+requires-python = ">=3.11"
+
+dependencies = [
+    "mcp>=2.0.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.27.0",
+    "asyncpg>=0.30.0",
+    "GitPython>=3.1.43",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+]
+
+[project.scripts]
+# One image, six entrypoints. Compose picks the server by command rather than by building six
+# nearly identical images.
+logs-mcp = "logs_mcp.server:main"
+metrics-mcp = "metrics_mcp.server:main"
+traces-mcp = "traces_mcp.server:main"
+database-mcp = "database_mcp.server:main"
+git-mcp = "git_mcp.server:main"
+source-code-mcp = "source_code_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "_shared",
+    "logs_mcp",
+    "metrics_mcp",
+    "traces_mcp",
+    "database_mcp",
+    "git_mcp",
+    "source_code_mcp",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

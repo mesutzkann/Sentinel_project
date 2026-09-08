@@ -4,7 +4,7 @@
 #   core          PostgreSQL only. Everything Phase 1 needs.
 #   samples       The 5 sample microservices (added in Phase 1, exercised in Phase 2).
 #   observability OTel Collector, Loki, Prometheus, Jaeger, Grafana (Phase 2).
-#   mcp           The MCP servers (Phase 4).
+#   mcp           The six read-only MCP servers (Phase 4).
 #
 #   docker compose --profile core up -d
 #   docker compose --profile core --profile samples up -d
@@ -40,6 +40,24 @@ x-samples-common: &samples-common
     timeout: 3s
     retries: 5
     start_period: 20s
+
+x-mcp-common: &mcp-common
+  profiles: [mcp, all]
+  restart: unless-stopped
+  build:
+    context: ./mcp-servers
+  environment: &mcp-env
+    LOKI_URL: http://loki:3100
+    PROMETHEUS_URL: http://prometheus:9090
+    JAEGER_URL: http://jaeger:16686
+    POSTGRES_DSN: "postgresql://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel_dev_pw}@postgres:5432/${POSTGRES_DB:-sentinel}"
+    REPO_ROOT: /repo
+  volumes:
+    # Read-only on purpose. In Phase 4 nothing writes to the repository, and the destructive
+    # tools that will in Phase 10 are a deliberate, separately-mounted decision rather than
+    # something these servers can do by accident.
+    - .:/repo:ro
+  mem_limit: 256m
 
 services:
   # ---------------------------------------------------------------- core ----
@@ -262,6 +280,73 @@ services:
       - loki
       - jaeger
     mem_limit: 384m
+
+  # ------------------------------------------------------------------- mcp ----
+  # Six servers from one image, differing only in which tools they register. They are the
+  # agent's entire read access to the running system: it reaches nothing except through these.
+  #
+  # git-mcp and source-code-mcp mount the repository read-only. That mount is why the agent can
+  # answer "what changed" and "show me that line" — and why it is :ro.
+
+  logs-mcp:
+    <<: *mcp-common
+    container_name: sentinel-logs-mcp
+    command: ["python", "-m", "logs_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7001"
+    ports:
+      - "127.0.0.1:${LOGS_MCP_PORT:-7001}:7001"
+
+  metrics-mcp:
+    <<: *mcp-common
+    container_name: sentinel-metrics-mcp
+    command: ["python", "-m", "metrics_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7002"
+    ports:
+      - "127.0.0.1:${METRICS_MCP_PORT:-7002}:7002"
+
+  traces-mcp:
+    <<: *mcp-common
+    container_name: sentinel-traces-mcp
+    command: ["python", "-m", "traces_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7003"
+    ports:
+      - "127.0.0.1:${TRACES_MCP_PORT:-7003}:7003"
+
+  database-mcp:
+    <<: *mcp-common
+    container_name: sentinel-database-mcp
+    command: ["python", "-m", "database_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7004"
+    ports:
+      - "127.0.0.1:${DATABASE_MCP_PORT:-7004}:7004"
+
+  git-mcp:
+    <<: *mcp-common
+    container_name: sentinel-git-mcp
+    command: ["python", "-m", "git_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7005"
+    ports:
+      - "127.0.0.1:${GIT_MCP_PORT:-7005}:7005"
+
+  source-code-mcp:
+    <<: *mcp-common
+    container_name: sentinel-source-code-mcp
+    command: ["python", "-m", "source_code_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7006"
+    ports:
+      - "127.0.0.1:${SOURCE_CODE_MCP_PORT:-7006}:7006"
 
 volumes:
   postgres-data:
