@@ -7,8 +7,8 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 4 of 12.** Foundation, observability, the local LLM layer and the MCP
-> tool surface. See
+> **Status: Phase 5 of 12.** Foundation, observability, the local LLM layer, the MCP tool
+> surface and hybrid retrieval. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -21,6 +21,8 @@ Everything runs locally. No hosted model, no paid API.
   a tool plan in under 150ms, benchmarked against its own base model.
 - **Four retrievers behind one interface.** BM25, dense, hybrid with reciprocal rank fusion, and
   hybrid plus cross-encoder reranking — measured against the same query set rather than asserted.
+  Three of the four are in; `POST /rag/search` takes the retriever by name, so the comparison is
+  something you run rather than something you are told.
 - **Real failures, not fixtures.** Five sample microservices with
   [15 chaos scenarios](sample-services/chaos/scenarios.md). Enabling one genuinely breaks the
   service; the telemetry is a side effect, exactly as in production. Six of the fifteen produce
@@ -207,13 +209,61 @@ Three things the tools do that a thin wrapper over each backend would not:
 The **MCP Tools** page in the frontend lists all of it, shows which servers are reachable and
 why not, and runs a tool with arguments seeded from its schema.
 
+## Hybrid retrieval
+
+Two retrievers over the same 28-document knowledge base — runbooks, architecture notes, service
+docs, ten postmortems and two known errors — fused by reciprocal rank.
+
+```bash
+ollama pull bge-m3                     # ~1.2 GB; embeddings, served by the same Ollama
+
+cd ai-service
+.venv/Scripts/alembic upgrade head     # creates the rag tables inside the existing schema
+.venv/Scripts/uvicorn app.main:app --port 8000
+
+curl -X POST http://localhost:8000/rag/ingest -H 'Content-Type: application/json' -d '{}'
+```
+
+Ingestion is a mirror of `datasets/knowledge/`, not an append: an unchanged file is skipped
+without being re-embedded, an edited one replaces its old chunks, and a deleted one leaves the
+index. Running it on every start costs a directory walk.
+
+```bash
+curl -X POST http://localhost:8000/rag/search -H 'Content-Type: application/json' -d '{
+  "query": "orders servisi yavasladi ama hic hata yok",
+  "retriever": "hybrid",
+  "k": 3
+}'
+```
+
+That query is in Turkish and the corpus is in English. It returns INC-00003 and INC-00009 — the
+two incidents where orders was slow with no errors, one a missing index and one an N+1 — because
+bge-m3 puts both languages in the same vector space.
+
+| | |
+|---|---|
+| Chunking | Markdown structure, ~400 tokens, 60 of overlap in whole blocks. A code fence is never split, and every chunk carries the heading path it sits under. |
+| Lexical | BM25 in memory, with Lucene's IDF rather than the textbook one, which goes negative for a term in more than half the corpus. Identifiers are indexed whole *and* split, so "max pool size" finds `MaxPoolSize`. |
+| Dense | bge-m3 through Ollama ([ADR-0004](docs/adr/0004-embeddings-through-ollama.md)), 1024 dimensions, HNSW over cosine. |
+| Fusion | Reciprocal rank, k = 60. Rankings rather than scores: a cosine of 0.82 and a BM25 score of 11.4 are not comparable quantities. |
+| Filters | `{"service": "orders", "document_type": ["runbook", "postmortem"]}`, evaluated identically in Python and in SQL — there is a test that fails if they ever disagree. |
+
+Every search writes a `rag.retrieval_logs` row with both candidate lists and the per-stage
+latencies, because which half proposed a chunk is the only thing that explains a surprising
+hybrid result, and it cannot be reconstructed afterwards.
+
+The hybrid retriever degrades rather than fails: if Ollama is down it answers from BM25 alone,
+and `GET /rag/stats` says whether the embedding model is reachable. It raises only when *both*
+halves fail — "the knowledge base has nothing about this" and "retrieval is broken" have to look
+different to an agent.
+
 ## Tests
 
 ```bash
 dotnet test backend/Sentinel.sln              # 18 unit, 28 integration (Testcontainers)
 cd frontend && npm test                       # 12 component tests
 cd mcp-servers && pytest                       # 64 unit
-cd ai-service && pytest                        # 47 unit
+cd ai-service && pytest                        # 135 unit, 23 against PostgreSQL
 ```
 
 The integration tests run the API against a real PostgreSQL started for the run, using the same
@@ -239,11 +289,11 @@ every unit test and returns nothing in production.
 ```text
 backend/          ASP.NET Core 8, Clean Architecture (Domain / Application / Infrastructure / Api)
 frontend/         React 19, TypeScript, Vite, Tailwind, TanStack Query, Zustand
-ai-service/       Python FastAPI: local LLM, structured output, prompts (agent and RAG later)
+ai-service/       Python FastAPI: local LLM, structured output, prompts, hybrid RAG (agent later)
 mcp-servers/      6 read-only MCP servers, one image, six entrypoints   (2 more in Phase 10)
 sample-services/  5 .NET microservices with chaos middleware
 infrastructure/   PostgreSQL init, Prometheus, Grafana, Loki, OTel
-datasets/         Routing training data and evaluation fixtures          (Phase 8+)
+datasets/         The seed knowledge base; routing data and eval fixtures (Phase 8+)
 docs/             Planning, ADRs, architecture notes
 ```
 
@@ -255,8 +305,8 @@ docs/             Planning, ADRs, architecture notes
 | 2 | Observability: OTel, Loki, Prometheus, Jaeger, Grafana, chaos behaviour | **Done** |
 | 3 | Local LLM provider and structured output | **Done** |
 | 4 | MCP infrastructure, read-only tools | **Done** |
-| 5 | Hybrid RAG | Next |
-| 6 | Reranker and retrieval evaluation | |
+| 5 | Hybrid RAG | **Done** |
+| 6 | Reranker and retrieval evaluation | Next |
 | 7 | Investigation agent | |
 | 8 | Fine-tuned router | |
 | 9 | Incident memory | |

@@ -1,8 +1,8 @@
 """The SentinelAI reasoning service.
 
-Phase 3 is the LLM layer only: a provider abstraction, structured output, and a prompt registry.
-The agent state machine, hybrid RAG and the MCP client arrive in later phases and mount onto the
-same app.
+Three surfaces so far, each mounted as its own router: the LLM layer from Phase 3, the MCP tool
+registry from Phase 4, and hybrid retrieval from Phase 5. The agent state machine arrives in
+Phase 7 and consumes all three rather than adding a fourth.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.api import llm as llm_api
 from app.api import mcp as mcp_api
+from app.api import rag as rag_api
 from app.config import settings
 from llm.prompts import registry
 
@@ -29,9 +30,9 @@ app = FastAPI(
     title="SentinelAI AI Service",
     version="0.1.0",
     description=(
-        "Local LLM access, structured output, the prompt registry, and the MCP tool "
-        "registry the agent reads the running system through. Investigations and retrieval "
-        "arrive in later phases."
+        "Local LLM access, structured output, the prompt registry, the MCP tool registry "
+        "the agent reads the running system through, and hybrid retrieval over the knowledge "
+        "base. Investigations arrive in Phase 7."
     ),
 )
 
@@ -48,6 +49,7 @@ app.add_middleware(
 
 app.include_router(llm_api.router)
 app.include_router(mcp_api.router)
+app.include_router(rag_api.router)
 
 
 class Health(BaseModel):
