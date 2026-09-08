@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
@@ -38,12 +36,8 @@ public static class ServiceDefaults
         builder.Services.AddSingleton(new SampleServiceInfo(serviceName));
         builder.Services.AddSingleton(new ChaosRegistry(scenarios));
 
-        builder.Services.ConfigureHttpJsonOptions(options =>
-        {
-            options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-            options.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        });
+        builder.Services.ConfigureHttpJsonOptions(
+            options => SampleJson.Apply(options.SerializerOptions));
 
         builder.Services.AddProblemDetails();
 

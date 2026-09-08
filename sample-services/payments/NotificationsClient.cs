@@ -1,3 +1,4 @@
+using Sentinel.Samples.Common;
 using Sentinel.Samples.Payments.Domain;
 
 namespace Sentinel.Samples.Payments;
@@ -31,12 +32,13 @@ public sealed class NotificationsClient
                 "/notifications",
                 new
                 {
-                    recipient = $"order-{payment.OrderId}@example.com",
-                    channel = "email",
-                    subject = "Payment confirmed",
-                    body = $"Payment {payment.ProviderReference} for {payment.Amount} "
+                    Recipient = $"order-{payment.OrderId}@example.com",
+                    Channel = "email",
+                    Subject = "Payment confirmed",
+                    Body = $"Payment {payment.ProviderReference} for {payment.Amount} "
                            + $"{payment.Currency} was authorised.",
                 },
+                SampleJson.Options,
                 cancellationToken);
 
             if (!response.IsSuccessStatusCode)

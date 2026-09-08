@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sentinel.Samples.Common;
 
 namespace Sentinel.Samples.Gateway;
 
@@ -55,7 +56,8 @@ public sealed class DownstreamClient
     {
         var response = await _http.PostAsJsonAsync(
             $"{Orders}/orders",
-            new { user_id = userId, items, currency },
+            new { UserId = userId, Items = items, Currency = currency },
+            SampleJson.Options,
             cancellationToken);
 
         var body = await ReadJsonAsync(response, cancellationToken);

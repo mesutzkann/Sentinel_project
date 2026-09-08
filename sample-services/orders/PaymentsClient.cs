@@ -1,3 +1,5 @@
+using Sentinel.Samples.Common;
+
 namespace Sentinel.Samples.Orders;
 
 /// <summary>
@@ -27,7 +29,8 @@ public sealed class PaymentsClient
     {
         var response = await _http.PostAsJsonAsync(
             "/payments/authorize",
-            new { order_id = orderId, amount, currency },
+            new { OrderId = orderId, Amount = amount, Currency = currency },
+            SampleJson.Options,
             cancellationToken);
 
         if (!response.IsSuccessStatusCode)
@@ -39,7 +42,8 @@ public sealed class PaymentsClient
             return null;
         }
 
-        return await response.Content.ReadFromJsonAsync<AuthorizePaymentResponse>(cancellationToken);
+        return await response.Content.ReadFromJsonAsync<AuthorizePaymentResponse>(
+            SampleJson.Options, cancellationToken);
     }
 }
 
