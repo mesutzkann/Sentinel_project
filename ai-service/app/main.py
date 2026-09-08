@@ -10,9 +10,11 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.api import llm as llm_api
+from app.api import mcp as mcp_api
 from app.config import settings
 from llm.prompts import registry
 
@@ -27,12 +29,25 @@ app = FastAPI(
     title="SentinelAI AI Service",
     version="0.1.0",
     description=(
-        "Local LLM access, structured output and the prompt registry. "
-        "Investigations and retrieval arrive in later phases."
+        "Local LLM access, structured output, the prompt registry, and the MCP tool "
+        "registry the agent reads the running system through. Investigations and retrieval "
+        "arrive in later phases."
     ),
 )
 
+# The MCP Tools page calls this service directly rather than through the backend, so it is a
+# cross-origin caller and needs to be allowed explicitly. Without this the page fails in a
+# browser while every curl against the same endpoints succeeds — a difference that is easy to
+# miss and hard to read when it bites.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings().cors_origins.split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(llm_api.router)
+app.include_router(mcp_api.router)
 
 
 class Health(BaseModel):
