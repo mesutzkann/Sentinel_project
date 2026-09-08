@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -70,13 +71,44 @@ public sealed class RecordModelPredictionHandler
             CompletionTokens = request.CompletionTokens,
             LatencyMs = request.LatencyMs,
             ValidJson = request.ValidJson,
-            Output = request.Output,
+            Output = AsJson(request.Output),
         };
 
         _db.ModelPredictions.Add(prediction);
         await _db.SaveChangesAsync(cancellationToken);
 
         return Map(prediction);
+    }
+
+    /// <summary>
+    /// Makes any output storable in the <c>jsonb</c> column.
+    /// </summary>
+    /// <remarks>
+    /// The interesting rows are exactly the ones whose output is not JSON: a call is recorded
+    /// with <c>valid_json = false</c> precisely because the model returned something that would
+    /// not parse, and that raw text is the evidence. Passed through unchanged it is rejected by
+    /// PostgreSQL, the insert fails, and the row the structured-output success rate is measured
+    /// from is the one row that can never be written.
+    ///
+    /// Text that is not JSON is stored as a JSON string, which is valid JSON, keeps the column
+    /// queryable, and loses nothing.
+    /// </remarks>
+    private static string? AsJson(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var _ = JsonDocument.Parse(output);
+            return output;
+        }
+        catch (JsonException)
+        {
+            return JsonSerializer.Serialize(output);
+        }
     }
 
     private static ModelPredictionDto Map(ModelPrediction p) => new(
