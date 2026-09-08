@@ -10,12 +10,15 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Structured logging from the start: in Phase 2 these events go to Loki through the OTel
-// collector, and the agent reads the platform's own logs the same way it reads a service's.
+// Structured logging: these events reach Loki through the OTel collector, and the agent reads
+// the platform's own logs the same way it reads a service's.
 builder.Host.UseSerilog((context, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .Enrich.FromLogContext()
-    .WriteTo.Console());
+    .WriteTo.Console()
+    .WriteToOtlp(context.Configuration));
+
+builder.AddSentinelTelemetry();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
