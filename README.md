@@ -7,7 +7,8 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 3 of 12.** Foundation, observability and the local LLM layer. See
+> **Status: Phase 4 of 12.** Foundation, observability, the local LLM layer and the MCP
+> tool surface. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -161,13 +162,58 @@ that never produced valid JSON. The AI service does not write that table: it own
 schema, the backend owns `sentinel`, so it reports over the backend's `/internal` API and the
 backend stores it. Both processes read one `INTERNAL_API_KEY`.
 
+## MCP tools
+
+Everything the agent can learn about the running system, it learns through an MCP server. There
+are six, each a container, all read-only — 34 tools between them.
+
+```bash
+docker compose --profile core --profile samples --profile observability --profile mcp up -d --build
+curl http://localhost:8000/mcp/tools | jq '.total_tools, .servers'
+```
+
+| Server | Port | Reads | Tools |
+|---|---|---|---|
+| logs-mcp | 7001 | Loki | 5 |
+| metrics-mcp | 7002 | Prometheus | 7 |
+| traces-mcp | 7003 | Jaeger | 5 |
+| database-mcp | 7004 | PostgreSQL | 6 |
+| git-mcp | 7005 | the repository | 6 |
+| source-code-mcp | 7006 | the working tree | 5 |
+
+Call one:
+
+```bash
+curl -X POST http://localhost:8000/mcp/call   -H 'Content-Type: application/json'   -d '{"tool": "metrics-mcp/get_service_metrics",
+       "arguments": {"service": "orders", "minutes": 60}}'
+```
+
+Tools are named `server/tool` because the name alone is ambiguous: `logs-mcp/get_error_rate`
+measures the share of log lines that are errors, and `metrics-mcp/get_error_rate` measures the
+share of requests answered 5xx. Those are different numbers and they disagree — a service that
+logs verbosely shows a low rate on the first while failing every request on the second.
+
+Three things the tools do that a thin wrapper over each backend would not:
+
+- **An empty result says so.** Six of the fifteen chaos scenarios produce no error log from the
+  failing component, so `[]` would read to a model as "I failed to look". Every tool reports
+  what it searched and that nothing matched.
+- **Counting does not download.** `get_error_rate` counts with a LogQL metric query. Fetching
+  the lines to `len()` them times out on a service that has been running for an afternoon.
+- **The classification is enforced, not documented.** Each tool carries a `readOnlyHint`, the
+  AI service's registry reads it, and the policy layer refuses anything not marked read-only
+  without an approval token. A tool the registry has never seen is refused outright.
+
+The **MCP Tools** page in the frontend lists all of it, shows which servers are reachable and
+why not, and runs a tool with arguments seeded from its schema.
+
 ## Layout
 
 ```text
 backend/          ASP.NET Core 8, Clean Architecture (Domain / Application / Infrastructure / Api)
 frontend/         React 19, TypeScript, Vite, Tailwind, TanStack Query, Zustand
 ai-service/       Python FastAPI: local LLM, structured output, prompts (agent and RAG later)
-mcp-servers/      8 MCP servers, one image with different entrypoints    (Phase 4+)
+mcp-servers/      6 read-only MCP servers, one image, six entrypoints   (2 more in Phase 10)
 sample-services/  5 .NET microservices with chaos middleware
 infrastructure/   PostgreSQL init, Prometheus, Grafana, Loki, OTel
 datasets/         Routing training data and evaluation fixtures          (Phase 8+)
@@ -181,8 +227,8 @@ docs/             Planning, ADRs, architecture notes
 | 1 | Foundation: repo, database, sample services, backend, frontend | **Done** |
 | 2 | Observability: OTel, Loki, Prometheus, Jaeger, Grafana, chaos behaviour | **Done** |
 | 3 | Local LLM provider and structured output | **Done** |
-| 4 | MCP infrastructure, read-only tools | Next |
-| 5 | Hybrid RAG | |
+| 4 | MCP infrastructure, read-only tools | **Done** |
+| 5 | Hybrid RAG | Next |
 | 6 | Reranker and retrieval evaluation | |
 | 7 | Investigation agent | |
 | 8 | Fine-tuned router | |

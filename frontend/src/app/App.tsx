@@ -6,6 +6,7 @@ import { LoginPage } from '../features/auth/LoginPage';
 import { useAuthStore } from '../features/auth/authStore';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { IncidentsPage } from '../features/incidents/IncidentsPage';
+import { McpToolsPage } from '../features/mcp/McpToolsPage';
 import { ServicesPage } from '../features/services/ServicesPage';
 
 const queryClient = new QueryClient({
@@ -76,6 +77,7 @@ function AuthGate() {
         <Route index element={<DashboardPage />} />
         <Route path="incidents" element={<IncidentsPage />} />
         <Route path="services" element={<ServicesPage />} />
+        <Route path="mcp" element={<McpToolsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

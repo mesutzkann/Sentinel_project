@@ -13,7 +13,7 @@ const navigation = [
   { to: '/services', label: 'Services' },
   { to: '/investigations', label: 'Investigations', phase: 7 },
   { to: '/knowledge', label: 'Knowledge Base', phase: 9 },
-  { to: '/mcp', label: 'MCP Tools', phase: 4 },
+  { to: '/mcp', label: 'MCP Tools' },
   { to: '/models', label: 'Models', phase: 8 },
   { to: '/evaluation', label: 'Evaluation', phase: 11 },
 ];
