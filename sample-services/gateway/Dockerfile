@@ -18,9 +18,11 @@ RUN dotnet publish gateway/Sentinel.Samples.Gateway.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
 WORKDIR /app
 
-# The .NET 8 runtime images already ship a non-root `app` user and export its id as
-# APP_UID, so creating one here only collides with it.
-USER $APP_UID
+# The .NET 8 runtime images already ship a non-root `app` user, so creating one here only
+# collides with it. Named rather than $APP_UID: this is the directive that keeps the
+# process off root, and it should fail loudly if the base image ever stops providing the
+# user instead of quietly resolving to an empty value.
+USER app
 
 COPY --from=build /app/publish .
 
