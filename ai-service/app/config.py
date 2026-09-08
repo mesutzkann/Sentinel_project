@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -41,6 +42,33 @@ class Settings(BaseSettings):
     # Attempts, not retries. Constrained decoding usually makes the first one enough.
     llm_max_attempts: int = 3
 
+    # ---- PostgreSQL ----
+    # The same instance and the same credentials the backend and the samples use; this service
+    # owns the `rag` schema inside it. Defaults are the compose values, so a natively run
+    # service works against a `docker compose --profile core up` with no extra configuration.
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "sentinel"
+    postgres_user: str = "sentinel"
+    postgres_password: str = "sentinel_dev_pw"
+
+    # ---- RAG ----
+    embedding_model: str = "bge-m3"
+
+    # Must match the width `rag.document_chunks.embedding` was migrated with. Changing it means
+    # a migration and a re-ingest, not a restart.
+    embedding_dimensions: int = 1024
+
+    # 400 tokens with 60 of overlap, from docs/planning.md.
+    chunk_target_tokens: int = 400
+    chunk_overlap_tokens: int = 60
+
+    # How many candidates each half of a hybrid search contributes before fusion.
+    retrieval_candidates: int = 30
+
+    # Where the seed corpus lives, relative to the repository root.
+    knowledge_base_path: str = "datasets/knowledge"
+
     # ---- Backend ----
     # Where model_predictions are reported. Empty disables reporting, which keeps the service
     # usable on its own without silently pretending the rows were written.
@@ -67,6 +95,25 @@ class Settings(BaseSettings):
     @property
     def prediction_reporting_enabled(self) -> bool:
         return bool(self.backend_base_url and self.internal_api_key)
+
+    @property
+    def database_url(self) -> str:
+        """SQLAlchemy URL for the async driver the store and the migrations both use.
+
+        Assembled from the same POSTGRES_* variables compose passes to everything else rather
+        than read from a DATABASE_URL of its own: one password in .env, not two that can drift
+        apart and produce an authentication failure nobody can locate.
+        """
+        return (
+            f"postgresql+asyncpg://{quote(self.postgres_user)}:"
+            f"{quote(self.postgres_password)}@{self.postgres_host}:{self.postgres_port}/"
+            f"{self.postgres_db}"
+        )
+
+    @property
+    def knowledge_base_dir(self) -> Path:
+        """Absolute path to the seed corpus."""
+        return _REPO_ROOT / self.knowledge_base_path
 
 
 @lru_cache(maxsize=1)
