@@ -128,6 +128,12 @@ public static class ServiceDefaults
     /// <summary>Maps <c>/health/live</c>, <c>/health/ready</c> and the chaos control endpoints.</summary>
     public static WebApplication MapSampleServiceDefaults(this WebApplication app)
     {
+        // Resolved eagerly, not for its API but for its constructor: ProcessMetrics creates the
+        // Meter and registers the CPU and working-set gauges there. A singleton nothing ever
+        // asks for is never built, and the metrics would simply never appear — with no error
+        // anywhere to say why.
+        app.Services.GetService<ProcessMetrics>();
+
         app.MapHealthChecks("/health/live", new HealthCheckOptions
         {
             Predicate = check => check.Tags.Contains("live"),

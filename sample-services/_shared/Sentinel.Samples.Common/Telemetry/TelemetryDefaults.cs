@@ -63,6 +63,10 @@ public static class TelemetryDefaults
             options.AddOtlpExporter();
         });
 
+        // Singleton so the CPU gauge keeps its previous sample between observations, and so the
+        // Meter outlives the request that first touched it.
+        builder.Services.AddSingleton<ProcessMetrics>();
+
         builder.Services.AddOpenTelemetry()
             .WithTracing(tracing => tracing
                 .SetResourceBuilder(resource)
@@ -86,9 +90,13 @@ public static class TelemetryDefaults
                 .SetResourceBuilder(resource)
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
-                // Working set and gen-2 collections, which is what makes scenario 7 visible as a
+                // Gen-2 collections and heap size, which is what makes scenario 7 visible as a
                 // monotonic climb rather than as a sudden OutOfMemoryException.
                 .AddRuntimeInstrumentation()
+                // CPU utilisation and working set. The runtime instrumentation above reports
+                // neither, so without this metrics-mcp cannot answer get_cpu_usage at all and
+                // scenario 15 has no metric signal.
+                .AddMeter(ProcessMetrics.MeterName)
                 .AddOtlpExporter());
 
         return builder;
