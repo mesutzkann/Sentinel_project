@@ -207,6 +207,33 @@ Three things the tools do that a thin wrapper over each backend would not:
 The **MCP Tools** page in the frontend lists all of it, shows which servers are reachable and
 why not, and runs a tool with arguments seeded from its schema.
 
+## Tests
+
+```bash
+dotnet test backend/Sentinel.sln              # 18 unit, 28 integration (Testcontainers)
+cd frontend && npm test                       # 12 component tests
+cd mcp-servers && pytest                       # 64 unit
+cd ai-service && pytest                        # 47 unit
+```
+
+The integration tests run the API against a real PostgreSQL started for the run, using the same
+image and the same init scripts as compose. That is not thoroughness for its own sake: the two
+bugs that shipped in Phase 1 were a generated column written as an empty string and a filtered
+index whose predicate PostgreSQL rejected, and neither would fail against an in-memory provider.
+Both now have a test named after them.
+
+The MCP servers additionally have a live suite covering all 34 tools against the real backends,
+skipped unless the stack is up:
+
+```bash
+docker compose --profile core --profile samples --profile observability up -d
+cd mcp-servers && LIVE_MCP=1 pytest tests/test_live.py
+```
+
+What it adds is the only thing that cannot be faked: that the query each tool sends is one the
+real Loki, Prometheus, Jaeger or PostgreSQL accepts. A LogQL filter in the wrong clause passes
+every unit test and returns nothing in production.
+
 ## Layout
 
 ```text
