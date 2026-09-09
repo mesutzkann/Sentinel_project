@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.api import rag as rag_api
 from app.main import app
+from rag.context_builder import ContextBuilder
 from rag.documents import RetrievedChunk, SourceType, StoredChunk
 from rag.embeddings import EmbeddingUnavailableError
 from rag.ingest import DocumentOutcome, IngestReport
@@ -114,6 +115,14 @@ class _StubLexical:
     size = 94
 
 
+class _StubReranker:
+    model = "BAAI/bge-reranker-v2-m3"
+    unavailable_reason = "sentence-transformers is not installed."
+
+    async def is_available(self) -> bool:
+        return False
+
+
 class _StubService:
     def __init__(self, hits: list[RetrievedChunk] | None = None) -> None:
         chunks = hits if hits is not None else [
@@ -124,10 +133,13 @@ class _StubService:
         self.embeddings = _StubEmbeddings()
         self.lexical = _StubLexical()
         self.pipeline = _StubPipeline()
+        self.reranker = _StubReranker()
+        self.context_builder = ContextBuilder()
         self.retrievers = {
             "hybrid": _StubRetriever("hybrid", chunks),
             "bm25": _StubRetriever("bm25", chunks),
             "vector": _StubRetriever("vector", chunks),
+            "hybrid_rerank": _StubRetriever("hybrid_rerank", chunks),
         }
         self.index_ready = False
 
@@ -172,7 +184,7 @@ def test_the_real_service_is_built_once_and_reused() -> None:
         second = rag_api.get_service(real_settings())
 
         assert first is second
-        assert set(first.retrievers) == {"bm25", "vector", "hybrid"}
+        assert set(first.retrievers) == {"bm25", "vector", "hybrid", "hybrid_rerank"}
     finally:
         rag_api._service = None  # noqa: SLF001
 
@@ -348,3 +360,34 @@ def test_stats_reports_the_corpus_and_whether_retrieval_can_run(client, service)
     # ones, and that is worth being able to see before a search returns half of what it should.
     assert body["embedding_model"] == "bge-m3"
     assert body["embedding_available"] is True
+
+
+def test_stats_says_why_the_reranker_is_unavailable(client, service) -> None:  # noqa: ANN001
+    # The cross-encoder is optional, so "not installed" is an ordinary state rather than a
+    # fault — but a hybrid_rerank search silently returning fused results is not something
+    # anyone should have to infer from the ranking.
+    body = client.get("/rag/stats").json()
+
+    assert body["rerank_model"] == "BAAI/bge-reranker-v2-m3"
+    assert body["rerank_available"] is False
+    assert "sentence-transformers" in body["rerank_unavailable_reason"]
+
+
+# ------------------------------------------------------------------- context ----
+
+
+def test_a_search_can_return_a_prompt_ready_context(client, service) -> None:  # noqa: ANN001
+    body = client.post("/rag/search", json={"query": "pool", "build_context": True}).json()
+
+    context = body["context"]
+
+    # The label is what lets the agent cite a source and the UI resolve the citation back to a
+    # chunk id; without it the retrieved text is an assertion rather than evidence.
+    assert "[S1] runbook · orders · RB-001 · Runbook > Fix" in context["text"]
+    assert context["sources"][0]["chunk_id"] == "chunk-1"
+    assert 0 < context["token_count"] <= 3000
+
+
+def test_context_is_off_unless_it_is_asked_for(client, service) -> None:  # noqa: ANN001
+    # A caller that renders the hits itself would otherwise pay for a second copy of them.
+    assert client.post("/rag/search", json={"query": "pool"}).json()["context"] is None

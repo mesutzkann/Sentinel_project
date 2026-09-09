@@ -16,19 +16,27 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, settings
 from rag.chunking import MarkdownChunker
+from rag.context_builder import ContextBuilder
 from rag.documents import SourceType
 from rag.embeddings import EmbeddingProvider, EmbeddingUnavailableError, OllamaEmbeddingProvider
 from rag.filters import KNOWN_KEYS, FilterError, normalize
 from rag.ingest import CorpusError, IngestionPipeline
 from rag.lexical import Bm25Index
-from rag.retrievers import Bm25Retriever, HybridRetriever, Retriever, VectorRetriever
+from rag.rerank import CrossEncoderReranker
+from rag.retrievers import (
+    Bm25Retriever,
+    HybridRerankRetriever,
+    HybridRetriever,
+    Retriever,
+    VectorRetriever,
+)
 from rag.store import PgVectorStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
-RetrieverName = Literal["bm25", "vector", "hybrid"]
+RetrieverName = Literal["bm25", "vector", "hybrid", "hybrid_rerank"]
 
 
 class RagService:
@@ -61,13 +69,29 @@ class RagService:
             lexical=self.lexical,
         )
 
+        self.reranker = CrossEncoderReranker(
+            model=config.rerank_model,
+            device=config.rerank_device_or_auto,
+            max_length=config.rerank_max_length,
+            batch_size=config.rerank_batch_size,
+        )
+        self.context_builder = ContextBuilder(token_budget=config.context_token_budget)
+
         bm25 = Bm25Retriever(self.lexical)
         vector = VectorRetriever(self.embeddings, self.store)
+        hybrid = HybridRetriever(bm25, vector, candidates=config.retrieval_candidates)
 
         self.retrievers: dict[str, Retriever] = {
             "bm25": bm25,
             "vector": vector,
-            "hybrid": HybridRetriever(bm25, vector, candidates=config.retrieval_candidates),
+            "hybrid": hybrid,
+            # Degrades to the fused order when the cross-encoder is not installed. A search is a
+            # request from a person or an agent that has something else to do; the evaluation
+            # builds its own with ``degrade=False``, because a benchmark row that quietly
+            # reports fused numbers under the reranker's name is worse than no row.
+            "hybrid_rerank": HybridRerankRetriever(
+                hybrid, self.reranker, candidates=config.retrieval_candidates
+            ),
         }
 
         self._index_loaded = False
@@ -118,6 +142,14 @@ class SearchRequest(BaseModel):
         default=None,
         description="Recorded on the retrieval log, so a search can be traced to what asked it.",
     )
+    build_context: bool = Field(
+        default=False,
+        description=(
+            "Also return the results assembled into a labelled, token-bounded block ready to "
+            "put in a prompt. What the investigation agent asks for; off by default because a "
+            "caller that renders the hits itself would be paying for a second copy of them."
+        ),
+    )
 
 
 class SearchHit(BaseModel):
@@ -135,6 +167,28 @@ class SearchHit(BaseModel):
     section: str | None = None
 
 
+class ContextSourceModel(BaseModel):
+    ref: str
+    chunk_id: str
+    document_id: str
+    title: str
+    source_type: SourceType
+    label: str
+    rank: int
+    score: float
+    service: str | None = None
+    external_id: str | None = None
+    path: str | None = None
+    section: str | None = None
+
+
+class ContextModel(BaseModel):
+    text: str
+    token_count: int
+    sources: list[ContextSourceModel]
+    dropped: list[str]
+
+
 class SearchResponse(BaseModel):
     query: str
     retriever: str
@@ -142,9 +196,11 @@ class SearchResponse(BaseModel):
     total: int
     latency_ms: dict[str, int]
     # Per-retriever candidate lists. Empty for a single-retriever search, which is the honest
-    # representation: there was nothing to fuse.
+    # representation: there was nothing to fuse. A `hybrid_rerank` search that could not load
+    # the cross-encoder reports `rerank_skipped` instead of `reranked`.
     candidates: dict[str, list[str]]
     results: list[SearchHit]
+    context: ContextModel | None = None
 
 
 class IngestRequest(BaseModel):
@@ -185,6 +241,9 @@ class StatsResponse(BaseModel):
     lexical_index_size: int
     embedding_model: str
     embedding_available: bool
+    rerank_model: str
+    rerank_available: bool
+    rerank_unavailable_reason: str | None = None
 
 
 # ---------------------------------------------------------------------- endpoints ----
@@ -233,6 +292,8 @@ async def search(
         investigation_id=request.investigation_id,
     )
 
+    context = service.context_builder.build(result.chunks) if request.build_context else None
+
     return SearchResponse(
         query=result.query,
         retriever=result.retriever,
@@ -240,6 +301,32 @@ async def search(
         total=len(result.chunks),
         latency_ms=result.stage_latency_ms,
         candidates=result.candidates,
+        context=(
+            ContextModel(
+                text=context.text,
+                token_count=context.token_count,
+                sources=[
+                    ContextSourceModel(
+                        ref=s.ref,
+                        chunk_id=s.chunk_id,
+                        document_id=s.document_id,
+                        title=s.title,
+                        source_type=s.source_type,
+                        label=s.label,
+                        rank=s.rank,
+                        score=round(s.score, 6),
+                        service=s.service,
+                        external_id=s.external_id,
+                        path=s.path,
+                        section=s.section,
+                    )
+                    for s in context.sources
+                ],
+                dropped=context.dropped,
+            )
+            if context is not None
+            else None
+        ),
         results=[
             SearchHit(
                 chunk_id=hit.chunk.chunk_id,
@@ -331,4 +418,7 @@ async def stats(
         lexical_index_size=service.lexical.size,
         embedding_model=service.embeddings.model,
         embedding_available=await service.embeddings.is_available(),
+        rerank_model=service.reranker.model,
+        rerank_available=await service.reranker.is_available(),
+        rerank_unavailable_reason=service.reranker.unavailable_reason,
     )

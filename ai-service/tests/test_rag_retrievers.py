@@ -12,8 +12,10 @@ import pytest
 from rag.documents import RetrievedChunk, SourceType, StoredChunk
 from rag.embeddings import EmbeddingError, EmbeddingProvider
 from rag.lexical import Bm25Index
+from rag.rerank import Reranker, RerankUnavailableError
 from rag.retrievers import (
     Bm25Retriever,
+    HybridRerankRetriever,
     HybridRetriever,
     VectorRetriever,
     fuse,
@@ -221,3 +223,99 @@ async def test_stage_latencies_are_reported_per_half() -> None:
     # Wall clock, not the sum of the halves: they run concurrently, and adding them up would
     # report a wait nobody did.
     assert result.total_latency_ms >= 0
+
+
+# ------------------------------------------------------------ the hybrid, reranked ----
+
+
+class _FakeReranker(Reranker):
+    """Puts the candidate whose content mentions the query last, first."""
+
+    def __init__(self, unavailable: bool = False) -> None:
+        self._unavailable = unavailable
+        self.seen: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return "fake_reranker"
+
+    @property
+    def model(self) -> str:
+        return "fake"
+
+    async def rerank(self, query, chunks, k):  # noqa: ANN001, ANN201
+        if self._unavailable:
+            raise RerankUnavailableError("sentence-transformers is not installed")
+
+        self.seen = [c.chunk_id for c in chunks]
+
+        return [
+            c.reranked(rank=rank, score=1.0 / rank, retriever=self.name)
+            for rank, c in enumerate(reversed(chunks), start=1)
+        ][:k]
+
+    async def is_available(self) -> bool:
+        return not self._unavailable
+
+
+async def test_the_reranker_gets_the_candidate_pool_not_the_final_five() -> None:
+    """The reason the two stages compose.
+
+    Fusion is a fast filter that has to get the right chunk into the top thirty; the reranker
+    turns thirty into five. Handing it five would rerank a list that was already the answer.
+    """
+    reranker = _FakeReranker()
+    retriever = HybridRerankRetriever(_hybrid(), reranker, candidates=10)
+
+    await retriever.retrieve("connection pool", k=1)
+
+    assert len(reranker.seen) == 2
+
+
+async def test_the_reranker_decides_the_final_order() -> None:
+    retriever = HybridRerankRetriever(_hybrid(), _FakeReranker(), candidates=10)
+
+    result = await retriever.retrieve("connection pool", k=2)
+
+    # Fusion ranks the two candidates leak, pool; the fake reranker reverses whatever it is
+    # given, so an order of pool, leak is the cross-encoder having had the last word.
+    assert result.retriever == "hybrid_rerank"
+    assert [c.chunk_id for c in result.chunks] == ["pool", "leak"]
+    assert result.candidates["reranked"] == ["pool", "leak"]
+
+
+async def test_the_fused_candidates_are_kept_alongside_the_reranked_ones() -> None:
+    # Which stage promoted a chunk is the only thing that explains a surprising result, and it
+    # cannot be reconstructed after the fact.
+    result = await HybridRerankRetriever(_hybrid(), _FakeReranker(), candidates=10).retrieve(
+        "connection pool", k=2
+    )
+
+    assert result.candidates["bm25"] == ["pool"]
+    assert result.candidates["fused"]
+    assert "rerank" in result.stage_latency_ms
+
+
+async def test_a_search_degrades_to_the_fused_order_without_the_cross_encoder() -> None:
+    """The optional dependency is missing on a fresh checkout, which is not an outage.
+
+    The chunks are the same ones in a worse order, and the result says so by carrying no
+    `reranked` list — a caller cannot mistake this for a reranked search.
+    """
+    retriever = HybridRerankRetriever(_hybrid(), _FakeReranker(unavailable=True), candidates=10)
+
+    result = await retriever.retrieve("connection pool", k=2)
+
+    assert [c.chunk_id for c in result.chunks] == ["leak", "pool"]
+    assert "reranked" not in result.candidates
+    assert "rerank_skipped" in result.candidates
+
+
+async def test_the_benchmark_refuses_to_degrade() -> None:
+    # A table whose hybrid_rerank row is quietly the fused numbers is worse than a missing row.
+    retriever = HybridRerankRetriever(
+        _hybrid(), _FakeReranker(unavailable=True), candidates=10, degrade=False
+    )
+
+    with pytest.raises(RerankUnavailableError):
+        await retriever.retrieve("connection pool", k=2)

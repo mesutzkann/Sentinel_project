@@ -63,8 +63,21 @@ class Settings(BaseSettings):
     chunk_target_tokens: int = 400
     chunk_overlap_tokens: int = 60
 
-    # How many candidates each half of a hybrid search contributes before fusion.
+    # How many candidates each half of a hybrid search contributes before fusion, and how many
+    # fused candidates the reranker is given to choose five from.
     retrieval_candidates: int = 30
+
+    # ---- Reranking ----
+    # The cross-encoder is an optional dependency: it is ~2.5 GB of PyTorch and a 2.2 GB model,
+    # and a search still answers without it (docs/adr/0005-reranker-runs-in-process.md). Empty
+    # device means "whatever sentence-transformers picks" — CUDA when there is a GPU free.
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_device: str = ""
+    rerank_max_length: int = 512
+    rerank_batch_size: int = 16
+
+    # Tokens the retrieved context may occupy in a prompt, from docs/planning.md.
+    context_token_budget: int = 3000
 
     # Where the seed corpus lives, relative to the repository root.
     knowledge_base_path: str = "datasets/knowledge"
@@ -91,6 +104,11 @@ class Settings(BaseSettings):
     # Secret a destructive tool call must carry. Empty means no destructive call can be
     # approved, which is the correct default and the only one Phase 4 needs.
     approval_secret: str = ""
+
+    @property
+    def rerank_device_or_auto(self) -> str | None:
+        """``None`` rather than an empty string, which sentence-transformers reads as a device."""
+        return self.rerank_device or None
 
     @property
     def prediction_reporting_enabled(self) -> bool:

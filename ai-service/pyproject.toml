@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The cross-encoder reranker, which Ollama cannot serve: ~2.5 GB of PyTorch plus a 2.2 GB model.
+# Optional because retrieval answers without it and the machine this is developed on is already
+# holding a language model. See docs/adr/0005-reranker-runs-in-process.md.
+rerank = [
+    "sentence-transformers>=3.3.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -30,7 +36,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app", "app.api", "llm", "llm.prompts", "reporting", "mcp_client", "rag"]
+packages = [
+    "app",
+    "app.api",
+    "llm",
+    "llm.prompts",
+    "reporting",
+    "mcp_client",
+    "rag",
+    "evaluation",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

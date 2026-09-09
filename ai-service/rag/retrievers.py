@@ -1,9 +1,9 @@
 """Four ways to find chunks, behind one interface.
 
-The interface is the point. Phase 6 measures recall@5 for BM25, dense, hybrid, and hybrid with a
-reranker over the same query set, and a comparison is only worth reading if the things compared
-are interchangeable — same call, same filters, same result shape. Three of the four live here;
-``HybridRerankRetriever`` wraps this one in Phase 6 and needs nothing new from it.
+The interface is the point. ``evaluation/rag_eval.py`` measures recall@5 for BM25, dense, hybrid
+and hybrid-plus-reranker over the same query set, and a comparison is only worth reading if the
+things compared are interchangeable — same call, same filters, same result shape. All four live
+here; the fourth is the third with a cross-encoder on the end and needs nothing else from it.
 
 Fusion is Reciprocal Rank Fusion. It combines rankings rather than scores, which matters because
 BM25 term weights and cosine similarities are not on the same scale and no amount of
@@ -23,6 +23,7 @@ from typing import Any
 from rag.documents import RetrievedChunk
 from rag.embeddings import EmbeddingProvider
 from rag.lexical import LexicalIndex
+from rag.rerank import Reranker, RerankUnavailableError
 from rag.store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,80 @@ class HybridRetriever(Retriever):
                 "fused": [c.chunk_id for c in fused],
             },
             filters=filters or {},
+        )
+
+
+class HybridRerankRetriever(Retriever):
+    """Hybrid retrieval, with a cross-encoder deciding the final order.
+
+    The hybrid search is asked for ``candidates`` chunks rather than ``k``, because that is the
+    whole point: fusion is being used as a fast filter that gets the right chunk into the top
+    thirty, and the reranker is being used to get it into the top five. Asking the fused search
+    for five and reranking those five reorders a list that was already the answer.
+    """
+
+    def __init__(
+        self,
+        hybrid: HybridRetriever,
+        reranker: Reranker,
+        candidates: int = DEFAULT_CANDIDATES,
+        degrade: bool = True,
+    ) -> None:
+        self._hybrid = hybrid
+        self._reranker = reranker
+        self._candidates = candidates
+        self._degrade = degrade
+
+    @property
+    def name(self) -> str:
+        return "hybrid_rerank"
+
+    async def retrieve(
+        self,
+        query: str,
+        k: int = 5,
+        filters: dict[str, Any] | None = None,
+    ) -> RetrievalResult:
+        started = time.perf_counter()
+        fused = await self._hybrid.retrieve(query, self._candidates, filters)
+
+        rerank_started = time.perf_counter()
+
+        try:
+            chunks = await self._reranker.rerank(query, fused.chunks, k)
+        except RerankUnavailableError as exc:
+            if not self._degrade:
+                raise
+
+            # The reranker is an optional dependency and the model is a 2.2 GB download, so a
+            # deployment without it is expected rather than broken. Degrading to the fused order
+            # returns the same chunks in a worse order, which is the right trade for a search
+            # request — but the result says so, in the stage map and by having no `reranked`
+            # candidate list, because an evaluation row that silently reports fused numbers
+            # under the reranker's name is worse than a missing row.
+            logger.warning("Reranking skipped: %s", exc)
+
+            return RetrievalResult(
+                query=query,
+                retriever=self.name,
+                chunks=fused.chunks[:k],
+                stage_latency_ms={**fused.stage_latency_ms, "total": _ms_since(started)},
+                candidates={**fused.candidates, "rerank_skipped": []},
+                filters=fused.filters,
+            )
+
+        return RetrievalResult(
+            query=query,
+            retriever=self.name,
+            chunks=chunks,
+            stage_latency_ms={
+                **{k_: v for k_, v in fused.stage_latency_ms.items() if k_ != "total"},
+                "fusion": fused.total_latency_ms,
+                "rerank": _ms_since(rerank_started),
+                "total": _ms_since(started),
+            },
+            candidates={**fused.candidates, "reranked": [c.chunk_id for c in chunks]},
+            filters=fused.filters,
         )
 
 
