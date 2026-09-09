@@ -352,8 +352,12 @@ five queries out of sixty.
 
 **It is not the retriever that finds everything.** At sixty it was the only row with no miss. It
 still has the fewest — one — but that one, `Q084` (*"hata oranı testere dişi gibi inip çıkıyor"*),
-is missed by all six retrievers. It is a gap in the corpus rather than in retrieval: nothing in
-`datasets/knowledge/` describes an error rate that sawtooths.
+is missed by all six, and it is a retrieval failure rather than a gap in the corpus:
+`runbooks/database-deadlock.md` says *"error rate in a **sawtooth**: it spikes, recovers on its
+own, spikes again"* in as many words. What nothing crosses is the metaphor — *testere dişi* to
+*sawtooth*. All six return circuit-breaker documents instead, which do describe an error rate
+that spikes and are the wrong answer, and BM25 returns nothing at all. It is the hardest query in
+the set at precisely the property bge-m3 was chosen for.
 
 It costs two to three times a fused search to do it: a p50 of 1.1–1.5 s across the three runs,
 of which 518 ms is the fused search the cross-encoder is reordering. The spread is contention for
