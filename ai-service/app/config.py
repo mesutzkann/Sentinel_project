@@ -67,17 +67,42 @@ class Settings(BaseSettings):
     # fused candidates the reranker is given to choose five from.
     retrieval_candidates: int = 30
 
+    # At most this many chunks of one document in a result. Adjacent chunks of a runbook score
+    # alike, so without a cap one document takes three of five slots and the second document the
+    # question needed falls outside them. 0 disables it. See rag/retrievers.py.
+    retrieval_max_chunks_per_document: int = 2
+
     # ---- Reranking ----
     # The cross-encoder is an optional dependency: it is ~2.5 GB of PyTorch and a 2.2 GB model,
     # and a search still answers without it (docs/adr/0005-reranker-runs-in-process.md). Empty
     # device means "whatever sentence-transformers picks" — CUDA when there is a GPU free.
+    #
+    # Empty dtype means "decide from the device": float16 on CUDA, float32 elsewhere. That
+    # choice is worth 1.6 s a search on this machine and costs nothing measurable in recall;
+    # rag/rerank.py carries the three measurements. Set it to float32 to check that for
+    # yourself, or when a GPU old enough to lack fast half precision is what is available.
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_device: str = ""
+    rerank_dtype: str = ""
     rerank_max_length: int = 512
-    rerank_batch_size: int = 16
+    rerank_batch_size: int = 32
 
     # Tokens the retrieved context may occupy in a prompt, from docs/planning.md.
     context_token_budget: int = 3000
+
+    # ---- Query expansion (HyDE) ----
+    # Ask the local model for the passage that would answer the question and search with that
+    # too, to close vocabulary gaps the question alone cannot cross. See rag/expansion.py.
+    #
+    # Off because it was measured, not because it was untried. It does what it was built to do —
+    # it rescued three of the four queries that motivated it — and it does not pay for itself:
+    # over 120 queries R@5 ties the plain hybrid at 0.944, R@3 is worse (0.890 against 0.910),
+    # eleven queries improve and eight get worse, and p50 is 5.8 s against 518 ms. The reranker
+    # closes the same vocabulary gap better and four times cheaper (rag/expansion.py).
+    # Turning this on adds a `hybrid_hyde` retriever rather than changing `hybrid`.
+    hyde_enabled: bool = False
+    hyde_max_tokens: int = 200
+    hyde_timeout_seconds: float = 20.0
 
     # Where the seed corpus lives, relative to the repository root.
     knowledge_base_path: str = "datasets/knowledge"

@@ -15,10 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.config import Settings, settings
+from llm.ollama_provider import OllamaLlmProvider
 from rag.chunking import MarkdownChunker
 from rag.context_builder import ContextBuilder
 from rag.documents import SourceType
 from rag.embeddings import EmbeddingProvider, EmbeddingUnavailableError, OllamaEmbeddingProvider
+from rag.expansion import HydeExpander, QueryExpander
 from rag.filters import KNOWN_KEYS, FilterError, normalize
 from rag.ingest import CorpusError, IngestionPipeline
 from rag.lexical import Bm25Index
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
-RetrieverName = Literal["bm25", "vector", "hybrid", "hybrid_rerank"]
+RetrieverName = Literal["bm25", "vector", "hybrid", "hybrid_rerank", "hybrid_hyde"]
 
 
 class RagService:
@@ -74,12 +76,37 @@ class RagService:
             device=config.rerank_device_or_auto,
             max_length=config.rerank_max_length,
             batch_size=config.rerank_batch_size,
+            dtype=config.rerank_dtype,
         )
         self.context_builder = ContextBuilder(token_budget=config.context_token_budget)
 
-        bm25 = Bm25Retriever(self.lexical)
-        vector = VectorRetriever(self.embeddings, self.store)
-        hybrid = HybridRetriever(bm25, vector, candidates=config.retrieval_candidates)
+        cap = config.retrieval_max_chunks_per_document or None
+
+        self.expander: QueryExpander | None = None
+
+        if config.hyde_enabled:
+            self.expander = HydeExpander(
+                OllamaLlmProvider(
+                    base_url=config.ollama_base_url,
+                    model=config.llm_model,
+                    timeout_seconds=config.hyde_timeout_seconds,
+                ),
+                max_tokens=config.hyde_max_tokens,
+                timeout_seconds=config.hyde_timeout_seconds,
+            )
+
+        # Two sets of halves. The ones named in `retrievers` return final results and carry the
+        # per-document cap; the ones inside the hybrid feed a candidate pool and must not, because
+        # a cap applied twice — once to each half, once to the fusion — throws away a document's
+        # third chunk before anything has had a chance to rank it.
+        bm25 = Bm25Retriever(self.lexical, max_per_document=cap)
+        vector = VectorRetriever(self.embeddings, self.store, max_per_document=cap)
+        hybrid = HybridRetriever(
+            Bm25Retriever(self.lexical),
+            VectorRetriever(self.embeddings, self.store),
+            candidates=config.retrieval_candidates,
+            max_per_document=cap,
+        )
 
         self.retrievers: dict[str, Retriever] = {
             "bm25": bm25,
@@ -90,9 +117,29 @@ class RagService:
             # builds its own with ``degrade=False``, because a benchmark row that quietly
             # reports fused numbers under the reranker's name is worse than no row.
             "hybrid_rerank": HybridRerankRetriever(
-                hybrid, self.reranker, candidates=config.retrieval_candidates
+                # An uncapped hybrid, for the same reason: this one is a pool, and the cap is
+                # applied once, at the end, by the retriever that returns the answer.
+                HybridRetriever(
+                    Bm25Retriever(self.lexical),
+                    VectorRetriever(self.embeddings, self.store),
+                    candidates=config.retrieval_candidates,
+                ),
+                self.reranker,
+                candidates=config.retrieval_candidates,
+                max_per_document=cap,
             ),
         }
+
+        if self.expander is not None:
+            # A second dense half, expanded. Registered under its own name rather than replacing
+            # `hybrid`, so the generation call is something a caller opts into per search and
+            # the two are comparable from the same running service.
+            self.retrievers["hybrid_hyde"] = HybridRetriever(
+                Bm25Retriever(self.lexical),
+                VectorRetriever(self.embeddings, self.store, expander=self.expander),
+                candidates=config.retrieval_candidates,
+                max_per_document=cap,
+            )
 
         self._index_loaded = False
 
@@ -267,7 +314,18 @@ async def search(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
 
-    retriever = service.retrievers[request.retriever]
+    try:
+        retriever = service.retrievers[request.retriever]
+    except KeyError as exc:
+        # Reachable for one name only: `hybrid_hyde` when HYDE_ENABLED is off. A 500 here would
+        # read as a bug in retrieval rather than as a setting nobody turned on.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Retriever '{request.retriever}' is not enabled in this service. "
+                f"Available: {', '.join(sorted(service.retrievers))}."
+            ),
+        ) from exc
 
     try:
         await service.ensure_index()

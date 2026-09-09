@@ -7,8 +7,8 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 5 of 12.** Foundation, observability, the local LLM layer, the MCP tool
-> surface and hybrid retrieval. See
+> **Status: Phase 6 of 12.** Foundation, observability, the local LLM layer, the MCP tool
+> surface, hybrid retrieval and its reranker. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -20,9 +20,9 @@ Everything runs locally. No hosted model, no paid API.
 - **A fine-tuned router.** A 1.5B model trained with QLoRA to turn a question into an intent and
   a tool plan in under 150ms, benchmarked against its own base model.
 - **Four retrievers behind one interface.** BM25, dense, hybrid with reciprocal rank fusion, and
-  hybrid plus cross-encoder reranking — measured against the same query set rather than asserted.
-  Three of the four are in; `POST /rag/search` takes the retriever by name, so the comparison is
-  something you run rather than something you are told.
+  hybrid plus cross-encoder reranking — measured against the same 120-query set rather than
+  asserted. `POST /rag/search` takes the retriever by name and `python -m evaluation.rag_eval`
+  prints the comparison, so it is something you run rather than something you are told.
 - **Real failures, not fixtures.** Five sample microservices with
   [15 chaos scenarios](sample-services/chaos/scenarios.md). Enabling one genuinely breaks the
   service; the telemetry is a side effect, exactly as in production. Six of the fifteen produce
@@ -257,13 +257,221 @@ and `GET /rag/stats` says whether the embedding model is reachable. It raises on
 halves fail — "the knowledge base has nothing about this" and "retrieval is broken" have to look
 different to an agent.
 
+## Reranking
+
+Fusion is a fast filter. It has to get the right chunk into the top thirty; a cross-encoder then
+decides which five of those thirty go in the prompt, reading the query and the chunk together
+instead of comparing two vectors that were computed apart.
+
+```bash
+cd ai-service
+pip install -e .[rerank]      # ~2.5 GB of PyTorch; bge-reranker-v2-m3 downloads on first use
+
+# On a CUDA machine, replace the CPU wheel pip resolved by default. Worth 20 s a search.
+pip install "torch==2.14.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+
+curl -X POST http://localhost:8000/rag/search -H 'Content-Type: application/json' -d '{
+  "query": "connections pinned at a round number and p99 at the timeout",
+  "retriever": "hybrid_rerank",
+  "build_context": true
+}'
+```
+
+The reranker is an optional dependency, because Ollama cannot serve a cross-encoder and the
+alternative was 4.7 GB on a machine already holding a language model
+([ADR-0005](docs/adr/0005-reranker-runs-in-process.md)). Without it a `hybrid_rerank` search
+returns the fused order, says so — no `reranked` candidate list, and `rerank_available: false`
+in `GET /rag/stats` — and the benchmark drops the row rather than reporting fused numbers under
+the reranker's name.
+
+`build_context: true` also returns what a prompt would actually contain: every chunk labelled
+`[S1] runbook · orders · RB-001 · Runbook > Fix`, the chunker's block overlap removed so the
+budget is not paid twice, and the whole thing capped at 3000 tokens. The label is what makes a
+citation resolvable — an agent that cannot point at the chunk behind its conclusion is asserting
+rather than citing — and the cap protects the incident's place in an 8k window.
+
+## Measuring retrieval
+
+```bash
+cd ai-service
+python -m evaluation.rag_eval --output run.json
+```
+
+A hundred and twenty labelled queries over the 28-document corpus
+([`datasets/evaluation/`](datasets/evaluation/_README.md)), through every retriever, printed
+as one table. The metrics are Recall@1/3/5, MRR and Precision@5, computed over **documents**
+rather than chunks: ground truth is `runbooks/connection-pool-exhaustion.md`, which stays true
+when the chunker changes, where a chunk id would go quietly wrong.
+
+The query set is split by what each query tests, and the split is the interesting output —
+`error_string` queries are exact stack traces where an embedding of `40P01` is close to nothing,
+`cross_lingual` queries are Turkish against an English corpus where BM25 scores near zero, and
+neither retriever owns both columns. That is the argument for the hybrid, made with numbers.
+
+It was sixty queries for its first run and is a hundred and twenty now. The doubling is recorded
+in [`datasets/evaluation/_README.md`](datasets/evaluation/_README.md), and so is the reason: at
+sixty, two of the columns rested on eight queries each, so one query moved a column by 0.125 —
+larger than most of the differences the table was being read for. Two of the conclusions below
+are corrections of conclusions the smaller set supported.
+
+The runner refuses to produce a misleading table: a query labelled with a document that is not
+in the index stops the run rather than scoring every retriever equally and mysteriously worse,
+and a query set with a duplicate id or an unlabelled query is rejected at load. Benchmark
+searches are not written to `rag.retrieval_logs`, which exists to diagnose the agent's searches.
+
+### What it says
+
+A hundred and twenty queries, k=5, on one 16 GB machine with the cross-encoder on its GPU. R is
+recall over documents; S is *success* — the share of queries with a relevant document in the top
+k, which is what "how often is it right" usually means. R@1 cannot exceed **0.763** here, because
+56 of the 120 queries have two relevant documents and one result cannot be both.
+
+| retriever | R@1 | R@3 | R@5 | S@1 | S@5 | MRR | P@5 | p50 | misses |
+|---|---|---|---|---|---|---|---|---|---|
+| `hybrid_rerank` | 0.642 | **0.956** | **0.973** | **0.850** | **0.992** | **0.912** | 0.449 | 1.5 s | **1** |
+| `hybrid` | 0.642 | 0.910 | 0.944 | **0.850** | 0.983 | 0.904 | 0.441 | 518 ms | 2 |
+| `hybrid_hyde` | 0.642 | 0.890 | 0.944 | **0.850** | 0.983 | 0.905 | 0.431 | 5.8 s | 2 |
+| `vector` | 0.642 | 0.856 | 0.890 | 0.833 | 0.967 | 0.890 | 0.419 | 522 ms | 4 |
+| `bm25` | 0.522 | 0.785 | 0.829 | 0.692 | 0.867 | 0.768 | 0.388 | **0 ms** | 16 |
+
+All five rows are one run of `--hyde`, which adds the expansion retrievers rather than replacing
+anything, so the latencies are comparable to each other and slightly pessimistic for
+`hybrid_rerank` — that run also had the 3B model resident.
+
+The reranker earns its row, and it earns it in depth rather than in first place. R@3 goes 0.910
+to 0.956: the question plain fusion answered at rank four or five, it answers at rank three.
+Eleven queries improve and six get worse, and all six of those are a first place becoming a
+second or a third — none leaves the top five, which is the only boundary that costs an answer.
+
+Two things the sixty-query run said did not survive the doubling, and both are worth naming,
+because a benchmark that only ever confirms itself is not being run.
+
+**Reranking does not cost first place.** At sixty queries its S@1 was 0.817 against fusion's
+0.867 and the table said so; at a hundred and twenty both are 0.850. That five-point penalty was
+five queries out of sixty.
+
+**It is not the retriever that finds everything.** At sixty it was the only row with no miss. It
+still has the fewest — one — but that one, `Q084` (*"hata oranı testere dişi gibi inip çıkıyor"*),
+is missed by all six retrievers. It is a gap in the corpus rather than in retrieval: nothing in
+`datasets/knowledge/` describes an error rate that sawtooths.
+
+It costs two to three times a fused search to do it: a p50 of 1.1–1.5 s across the three runs,
+of which 518 ms is the fused search the cross-encoder is reordering. The spread is contention for
+the GPU, and the 1.5 s in the table is the slow end, from the run that also held the 3B model.
+
+The cross-encoder half of that took two corrections to get right, and both are in
+[ADR-0005](docs/adr/0005-reranker-runs-in-process.md). `pip install torch` resolves a CPU-only
+wheel without saying so, and 30 pairs of 512 tokens on a CPU is **21.5 s**, not the 300–600 ms
+the ADR predicted. On the GPU at the precision the weights ship in it is 1.6–2.6 s. At float16 —
+which `RERANK_DTYPE` picks on its own when the device is CUDA — it is 0.36–0.47 s, which is what
+the original estimate was describing without knowing it. Recall was re-measured rather than
+assumed at each step: over the sixty-query set every metric came out identical between the CPU
+float32 run and the GPU float16 one, and exactly one query differed at all — in its fourth
+result, between two documents that were both irrelevant.
+
+### The split by query kind
+
+Recall@5, by what the query is testing:
+
+| retriever | cross_lingual | error_string | filtered | lookup | symptom |
+|---|---|---|---|---|---|
+| `bm25` | 0.385 | **1.000** | **1.000** | 0.932 | 0.900 |
+| `vector` | 0.846 | 0.955 | 0.988 | 0.977 | 0.750 |
+| `hybrid` | 0.846 | **1.000** | 0.988 | 0.955 | 0.950 |
+| `hybrid_rerank` | **0.904** | **1.000** | 0.988 | **1.000** | **0.983** |
+
+The split is still the argument for fusing two retrievers, but it is not the argument the
+sixty-query run made. BM25 still takes `error_string` outright and still collapses on
+`cross_lingual` — 0.385, by construction, since a Turkish question and an English corpus share
+almost no tokens.
+
+What reversed is `symptom`. Those queries describe a failure in an engineer's words rather than
+the document's, and the dense half was supposed to own them; it scores 0.750 there, *below*
+BM25's 0.900. A symptom written out in prose turns out to share more literal vocabulary with the
+runbook than an embedding of the whole sentence preserves. Fused, the same queries score 0.950 —
+a better argument for fusion than "each half owns a column" was, because neither half owns this
+one and the fusion beats both.
+
+Reranking then lifts precisely the two columns each half is worst at: `symptom` 0.950 to 0.983,
+and `cross_lingual` 0.846 to 0.904.
+
+### The cross-encoder is a vote, not a verdict
+
+`--compare-rerank-modes` adds the row where the cross-encoder replaces the fused order instead of
+being fused with it:
+
+| | R@1 | R@3 | R@5 | S@1 | S@5 | MRR | P@5 | cross_lingual | misses |
+|---|---|---|---|---|---|---|---|---|---|
+| `hybrid_rerank` (blend) | 0.642 | **0.956** | **0.973** | 0.850 | **0.992** | 0.912 | 0.449 | **0.904** | **1** |
+| `rerank_only` (replace) | **0.655** | 0.933 | 0.949 | **0.867** | 0.975 | **0.918** | **0.464** | 0.808 | 3 |
+
+Replacing is better at the top of the ranking and worse below it. It wins R@1, S@1, MRR and
+precision, and it loses three queries the blend keeps — one of them `Q031`, a Turkish question
+plain fusion had at rank one. Its `cross_lingual` recall is 0.808: below the blend's 0.904 and
+below plain fusion's 0.846, so the cross-encoder is the weaker of the two models at the one
+property bge-m3 was chosen for. That is the same weakness the first run found, and smaller than
+sixty queries made it look.
+
+The blend wins the column that decides what a prompt contains. Five chunks go into the context;
+whether the right document is first or third among them costs nothing, and whether it is there at
+all costs the answer. So the cross-encoder is fused with the fused order rather than allowed to
+overrule it — and `blend=False` stays runnable so that sentence stays checkable.
+
+### One document does not get five slots
+
+Adjacent chunks of one runbook score alike, so nothing stops a single document taking every slot
+in a five-chunk result. `RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT` caps it at two — two rather than one
+because a runbook's symptom and its fix are different chunks and an investigation usually wants
+both. `--no-diversity` measures what the cap is worth:
+
+| | R@3 | R@5 | P@5 | misses |
+|---|---|---|---|---|
+| `hybrid_rerank`, capped | **0.956** | **0.973** | 0.449 | 1 |
+| `hybrid_rerank`, uncapped | 0.951 | 0.964 | **0.490** | 1 |
+| `hybrid`, capped | **0.910** | **0.944** | 0.441 | 2 |
+| `hybrid`, uncapped | 0.906 | 0.939 | **0.485** | 2 |
+
+About a point of recall@5 for four of precision@5 — and it rescues no query that was otherwise
+lost: the miss lists are identical with the cap and without it. What it recovers is the *second*
+relevant document of a query that has two, which is 56 of these 120, and is exactly what an
+investigation that wants both the runbook and the postmortem needs. The precision it gives up is
+chunk-level duplication: a second chunk of a document already retrieved scores as relevant and
+tells the agent nothing new.
+
+### Query expansion, and why it is off
+
+[`rag/expansion.py`](ai-service/rag/expansion.py) implements HyDE: ask the 3B model for the
+passage that *would* answer the question, and search with that too. It was built for four
+measured failures where the question and its answer share almost no vocabulary — a search for
+"what is the label called" that never reaches a document saying `{service_name="orders"}`.
+
+It closed the gap it was built for. `Q047` — "how do I query the logs of a service, and what is
+the label called", which no retriever without it finds at all — comes back at rank 4; `Q042` goes
+from 4 to 2, `Q014` from 5 to 4. Eleven queries improve.
+
+Eight get worse, and one of the eight is `Q035`, from rank one to unfound: a 3B model writing an
+English probe from a Turkish question sometimes writes about a different service, and fusion
+protects the answer from that but not the top of the ranking. R@5 ties plain fusion at 0.944, R@3
+is worse at 0.890, and it costs eleven times the latency.
+
+So `HYDE_ENABLED` is `false`, and the reason is now sharper than "it loses on average" — because
+over a hundred and twenty queries it does not lose on average. **The reranker closes the same gap
+better and four times cheaper.** `Q047` unfound → rank 3, against HyDE's 4. `Q014` 5 → 3, against
+4. `Q038` 4 → 3, where HyDE left it at 4. Only `Q042` is a query HyDE places higher. Generating a
+probe was the expensive way to reach a document whose vocabulary the question did not share;
+reading the query and the chunk together is the cheap one.
+
+The code stays: `--hyde` reproduces the row and `"retriever": "hybrid_hyde"` runs it per search.
+A measured negative result is worth more than an untested feature flag, and this one is now the
+evidence for a design decision rather than just a discarded idea.
+
 ## Tests
 
 ```bash
 dotnet test backend/Sentinel.sln              # 18 unit, 28 integration (Testcontainers)
 cd frontend && npm test                       # 12 component tests
 cd mcp-servers && pytest                       # 64 unit
-cd ai-service && pytest                        # 135 unit, 23 against PostgreSQL
+cd ai-service && pytest                        # 232 unit, 23 against PostgreSQL
 ```
 
 The integration tests run the API against a real PostgreSQL started for the run, using the same
@@ -293,7 +501,7 @@ ai-service/       Python FastAPI: local LLM, structured output, prompts, hybrid 
 mcp-servers/      6 read-only MCP servers, one image, six entrypoints   (2 more in Phase 10)
 sample-services/  5 .NET microservices with chaos middleware
 infrastructure/   PostgreSQL init, Prometheus, Grafana, Loki, OTel
-datasets/         The seed knowledge base; routing data and eval fixtures (Phase 8+)
+datasets/         The seed knowledge base and the retrieval query set; routing data in Phase 8
 docs/             Planning, ADRs, architecture notes
 ```
 
@@ -306,8 +514,8 @@ docs/             Planning, ADRs, architecture notes
 | 3 | Local LLM provider and structured output | **Done** |
 | 4 | MCP infrastructure, read-only tools | **Done** |
 | 5 | Hybrid RAG | **Done** |
-| 6 | Reranker and retrieval evaluation | Next |
-| 7 | Investigation agent | |
+| 6 | Reranker and retrieval evaluation | **Done** |
+| 7 | Investigation agent | Next |
 | 8 | Fine-tuned router | |
 | 9 | Incident memory | |
 | 10 | Human-in-the-loop remediation | |

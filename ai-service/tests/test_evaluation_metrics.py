@@ -15,7 +15,9 @@ from evaluation.metrics import (
     comparison_table,
     precision_at_k,
     recall_at_k,
+    recall_ceiling,
     reciprocal_rank,
+    success_at_k,
     summarize,
 )
 
@@ -80,6 +82,39 @@ def test_nothing_returned_is_precision_zero() -> None:
     assert precision_at_k([], [RUNBOOK], k=5) == 0.0
 
 
+# -------------------------------------------------------------------- success ----
+
+
+def test_success_asks_whether_anything_relevant_was_found() -> None:
+    """The number people mean by "accuracy", and the one recall is mistaken for.
+
+    Both queries below found one of two wanted documents at rank one. Recall@1 calls that 0.5,
+    correctly and unhelpfully; success@1 calls it a hit, which is what "was the first result
+    right?" means.
+    """
+    assert success_at_k([RUNBOOK, UNRELATED], [RUNBOOK, POSTMORTEM], k=1) == 1.0
+    assert recall_at_k([RUNBOOK, UNRELATED], [RUNBOOK, POSTMORTEM], k=1) == pytest.approx(0.5)
+
+
+def test_success_is_zero_when_the_top_k_has_nothing() -> None:
+    assert success_at_k([UNRELATED, UNRELATED], [RUNBOOK], k=2) == 0.0
+
+
+def test_the_recall_ceiling_is_reported_because_a_number_needs_its_maximum() -> None:
+    """Two of these three queries want two documents, so recall@1 cannot beat 0.667 here.
+
+    Quoting recall@1 without it invites the conclusion that a retriever failed a third of the
+    time when the metric never allowed anything else.
+    """
+    outcomes = [
+        _outcome([RUNBOOK], [RUNBOOK, POSTMORTEM], query_id="Q001"),
+        _outcome([RUNBOOK], [RUNBOOK, POSTMORTEM], query_id="Q002"),
+        _outcome([RUNBOOK], [RUNBOOK], query_id="Q003"),
+    ]
+
+    assert recall_ceiling(outcomes) == pytest.approx(2 / 3)
+
+
 # ------------------------------------------------------------------------ mrr ----
 
 
@@ -110,6 +145,7 @@ def test_the_summary_averages_over_the_query_set() -> None:
 
     assert scores.queries == 2
     assert scores.recall_at_5 == pytest.approx(0.5)
+    assert scores.success_at_5 == pytest.approx(0.5)
     assert scores.mrr == pytest.approx(0.5)
 
 
@@ -167,3 +203,16 @@ def test_the_table_is_ordered_by_the_question_it_answers() -> None:
 
     assert lines[2].startswith("| hybrid_rerank")
     assert lines[3].startswith("| bm25")
+
+
+def test_every_row_has_a_column_heading() -> None:
+    """The header is written by hand and the row by another method; they drift silently.
+
+    They did: Success@1 and Success@5 were added to the row and not to the header, and the
+    published table read its p50 as its MRR for a whole benchmark run.
+    """
+    row = summarize([_outcome([RUNBOOK], [RUNBOOK])])
+
+    header, separator, values = comparison_table([row]).splitlines()
+
+    assert header.count("|") == values.count("|") == separator.count("|")

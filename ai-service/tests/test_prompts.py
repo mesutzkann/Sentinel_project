@@ -23,10 +23,27 @@ def test_shipped_prompts_load() -> None:
     assert "incident_summary.v1" in ids
 
 
-def test_every_shipped_prompt_declares_a_schema_placeholder() -> None:
-    """A structured-output prompt without the schema in it tells the model nothing about shape."""
+def test_a_prompt_that_asks_for_json_shows_the_schema() -> None:
+    """A structured-output prompt without the schema in it tells the model nothing about shape.
+
+    Scoped to the prompts that ask for JSON rather than to all of them: `hyde_passage` asks for
+    three sentences of prose, and requiring a schema placeholder in it would be requiring the
+    wrong thing of the right prompt.
+    """
     for prompt in registry().all():
-        assert "schema" in prompt.variables, f"{prompt.id} does not reference the schema"
+        if "JSON" not in prompt.template:
+            continue
+
+        assert "schema" in prompt.variables, f"{prompt.id} asks for JSON without a schema"
+
+
+def test_every_prompt_renders_with_its_declared_variables() -> None:
+    # The registry is loaded by name at call sites; a prompt whose placeholders nobody passes
+    # fails at render time in production and here instead.
+    for prompt in registry().all():
+        rendered = prompt.render(**{name: "x" for name in prompt.variables})
+
+        assert "{{" not in rendered
 
 
 def test_render_substitutes_placeholders() -> None:

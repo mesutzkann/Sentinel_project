@@ -198,3 +198,48 @@ async def test_an_encoder_that_was_handed_in_is_available() -> None:
 
     assert await reranker.is_available() is True
     assert reranker.unavailable_reason is None
+
+
+# ------------------------------------------------------------------ precision ----
+#
+# Loading the weights as float16 on a GPU is worth 1.6 s a search and is therefore worth a test
+# that the resolution is not quietly doing something else. torch is the optional extra, so
+# these skip rather than fail where it is absent.
+
+torch = pytest.importorskip("torch", reason="the rerank extra is not installed")
+
+
+def test_a_gpu_gets_half_precision() -> None:
+    reranker = CrossEncoderReranker(device="cuda")
+
+    assert reranker._model_kwargs() == {"dtype": torch.float16}
+
+
+def test_a_cpu_is_left_at_full_precision() -> None:
+    """float16 on a CPU is emulated and slower than float32, so it must not be inherited."""
+    reranker = CrossEncoderReranker(device="cpu")
+
+    assert reranker._model_kwargs() == {}
+
+
+def test_an_explicit_precision_wins_over_the_device() -> None:
+    reranker = CrossEncoderReranker(device="cuda", dtype="float32")
+
+    assert reranker._model_kwargs() == {"dtype": torch.float32}
+
+
+def test_a_misspelled_precision_is_refused_rather_than_ignored() -> None:
+    """Silently falling back would be a reranker four times slower than the one configured."""
+    reranker = CrossEncoderReranker(device="cuda", dtype="fp16")
+
+    with pytest.raises(RerankUnavailableError, match="float16"):
+        reranker._model_kwargs()
+
+
+def test_an_unset_device_asks_the_machine() -> None:
+    """Empty device is what sentence-transformers picks, and it picks CUDA when there is one."""
+    reranker = CrossEncoderReranker(device=None)
+
+    expected = {"dtype": torch.float16} if torch.cuda.is_available() else {}
+
+    assert reranker._model_kwargs() == expected

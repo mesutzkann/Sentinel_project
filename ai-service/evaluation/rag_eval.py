@@ -38,10 +38,13 @@ from evaluation.metrics import (
     RetrieverScores,
     comparison_table,
     recall_at_k,
+    recall_ceiling,
     summarize,
 )
+from llm.ollama_provider import OllamaLlmProvider
 from rag.documents import RetrievedChunk
 from rag.embeddings import OllamaEmbeddingProvider
+from rag.expansion import HydeExpander
 from rag.lexical import Bm25Index
 from rag.rerank import CrossEncoderReranker
 from rag.retrievers import (
@@ -170,6 +173,9 @@ async def build_retrievers(
     config: Settings,
     store: PgVectorStore,
     include_rerank: bool,
+    compare_rerank_modes: bool = False,
+    max_per_document: int | None = None,
+    include_hyde: bool = False,
 ) -> tuple[dict[str, Retriever], set[str], str | None]:
     """Assemble all four retrievers over the ingested corpus.
 
@@ -199,12 +205,54 @@ async def build_retrievers(
             "Three of the four retrievers need it, so there is nothing to compare."
         )
 
-    bm25 = Bm25Retriever(lexical)
-    vector = VectorRetriever(embeddings, store)
-    hybrid = HybridRetriever(bm25, vector, candidates=config.retrieval_candidates)
+    def halves() -> tuple[Bm25Retriever, VectorRetriever]:
+        """Uncapped halves, for a hybrid that is producing a candidate pool.
+
+        A cap applied to each half and again to the fusion discards a document's third chunk
+        before anything has ranked it, so the cap is applied once, by whichever retriever
+        returns the answer.
+        """
+        return Bm25Retriever(lexical), VectorRetriever(embeddings, store)
+
+    bm25 = Bm25Retriever(lexical, max_per_document=max_per_document)
+    vector = VectorRetriever(embeddings, store, max_per_document=max_per_document)
+    hybrid = HybridRetriever(
+        *halves(), candidates=config.retrieval_candidates, max_per_document=max_per_document
+    )
 
     retrievers: dict[str, Retriever] = {"bm25": bm25, "vector": vector, "hybrid": hybrid}
     unavailable: str | None = None
+
+    if include_hyde:
+        provider = OllamaLlmProvider(
+            base_url=config.ollama_base_url,
+            model=config.llm_model,
+            timeout_seconds=config.hyde_timeout_seconds,
+        )
+
+        if not await provider.is_available():
+            raise EvalError(
+                f"Ollama at {config.ollama_base_url} does not have '{config.llm_model}', "
+                "which query expansion generates with. Run: ollama pull " + config.llm_model
+            )
+
+        expander = HydeExpander(
+            provider,
+            max_tokens=config.hyde_max_tokens,
+            timeout_seconds=config.hyde_timeout_seconds,
+        )
+
+        # Only the dense half is expanded — BM25 keeps the literal query, or `40P01` disappears
+        # into three sentences of invented prose. See rag/expansion.py.
+        retrievers["vector_hyde"] = VectorRetriever(
+            embeddings, store, max_per_document=max_per_document, expander=expander
+        )
+        retrievers["hybrid_hyde"] = HybridRetriever(
+            Bm25Retriever(lexical),
+            VectorRetriever(embeddings, store, expander=expander),
+            candidates=config.retrieval_candidates,
+            max_per_document=max_per_document,
+        )
 
     if include_rerank:
         reranker = CrossEncoderReranker(
@@ -212,12 +260,30 @@ async def build_retrievers(
             device=config.rerank_device_or_auto,
             max_length=config.rerank_max_length,
             batch_size=config.rerank_batch_size,
+            dtype=config.rerank_dtype,
         )
 
         if await reranker.is_available():
             retrievers["hybrid_rerank"] = HybridRerankRetriever(
-                hybrid, reranker, candidates=config.retrieval_candidates, degrade=False
+                HybridRetriever(*halves(), candidates=config.retrieval_candidates),
+                reranker,
+                candidates=config.retrieval_candidates,
+                degrade=False,
+                max_per_document=max_per_document,
             )
+
+            if compare_rerank_modes:
+                # The reranker as a verdict rather than a vote. It is the design the first run
+                # measured and the reason the shipped one blends instead, so it stays runnable
+                # — but it doubles the slowest part of the benchmark, so it is opt-in.
+                retrievers["rerank_only"] = HybridRerankRetriever(
+                    HybridRetriever(*halves(), candidates=config.retrieval_candidates),
+                    reranker,
+                    candidates=config.retrieval_candidates,
+                    degrade=False,
+                    blend=False,
+                    max_per_document=max_per_document,
+                )
         else:
             unavailable = reranker.unavailable_reason or "the cross-encoder could not be loaded"
 
@@ -307,10 +373,17 @@ def report(
     scores = [summarize(collected) for collected in outcomes.values()]
     by_id = {query.id: query for query in queries}
 
+    ceiling = recall_ceiling(next(iter(outcomes.values())))
+    multi = sum(1 for query in queries if len(query.relevant_documents) > 1)
+
     sections = [
         f"# Retrieval evaluation — {len(queries)} queries, k={k}",
         "",
         comparison_table(scores),
+        "",
+        f"R@1 cannot exceed {ceiling:.3f} on this set: {multi} of {len(queries)} queries have "
+        "more than one relevant document, and one result cannot be two of them. S@1 is the "
+        "share of queries whose first result was relevant.",
         "",
         f"## Recall@{k} by query kind",
         "",
@@ -341,12 +414,16 @@ def as_json(
     return {
         "k": k,
         "queries": len(queries),
+        "recall_at_1_ceiling": round(recall_ceiling(next(iter(outcomes.values()))), 4),
         "scores": [
             {
                 "retriever": s.retriever,
                 "recall_at_1": round(s.recall_at_1, 4),
                 "recall_at_3": round(s.recall_at_3, 4),
                 "recall_at_5": round(s.recall_at_5, 4),
+                "success_at_1": round(s.success_at_1, 4),
+                "success_at_3": round(s.success_at_3, 4),
+                "success_at_5": round(s.success_at_5, 4),
                 "mrr": round(s.mrr, 4),
                 "precision_at_5": round(s.precision_at_5, 4),
                 "latency_p50_ms": s.latency_p50_ms,
@@ -385,6 +462,21 @@ async def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="skip the cross-encoder row (the other three need no extra dependency)",
     )
+    parser.add_argument(
+        "--hyde",
+        action="store_true",
+        help="also measure query expansion: the dense half searches for a generated answer too",
+    )
+    parser.add_argument(
+        "--no-diversity",
+        action="store_true",
+        help="let one document take every slot (measures what the per-document cap is worth)",
+    )
+    parser.add_argument(
+        "--compare-rerank-modes",
+        action="store_true",
+        help="also measure the cross-encoder replacing the fused order instead of blending",
+    )
     args = parser.parse_args(argv)
 
     config = settings()
@@ -393,7 +485,14 @@ async def main(argv: list[str] | None = None) -> int:
     try:
         queries = load_queries(args.queries)
         retrievers, indexed, unavailable = await build_retrievers(
-            config, store, include_rerank=not args.no_rerank
+            config,
+            store,
+            include_rerank=not args.no_rerank,
+            compare_rerank_modes=args.compare_rerank_modes,
+            include_hyde=args.hyde,
+            max_per_document=(
+                None if args.no_diversity else config.retrieval_max_chunks_per_document or None
+            ),
         )
         check_labels(queries, indexed)
 

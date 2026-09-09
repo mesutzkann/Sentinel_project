@@ -32,10 +32,23 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
-# Pairs scored per forward pass. Cost is quadratic in sequence length and linear in batch, and
-# on CPU — which is where this runs on a machine whose VRAM is holding the reasoning model — 16
-# pairs of 512 tokens is about the largest batch that stays under a second.
-DEFAULT_BATCH_SIZE = 16
+# Pairs scored per forward pass. The candidate pool is 30, so 32 scores it in one pass on a GPU.
+# On CPU the batch barely matters — nothing about 30 pairs of 512 tokens is fast there — and it
+# is the one case where a smaller batch would help, by bounding resident memory rather than time.
+DEFAULT_BATCH_SIZE = 32
+
+# Weights precision. Empty means *decide from the device*: float16 on CUDA, float32 anywhere
+# else. This is not a micro-optimisation — it is the difference between a reranker that can be
+# in a request path and one that cannot. Measured on one RTX 3060, 30 pairs of 512 tokens:
+#
+#     CPU (torch+cpu wheel)   21.5 s
+#     CUDA, float32          1.6–2.6 s
+#     CUDA, float16          0.36–0.47 s
+#
+# float16 on CPU is not the missing fourth row: PyTorch's CPU kernels for it are emulated and
+# slower than float32, which is why this resolves from the device rather than defaulting to a
+# precision. The recall it produces is unchanged — the benchmark is what says so.
+DEFAULT_DTYPE = ""
 
 # Tokens per (query, chunk) pair. bge-reranker-v2-m3 accepts 8192, and using it would waste an
 # order of magnitude: chunks are ~400 tokens by construction, so 512 covers the query, the chunk
@@ -134,11 +147,13 @@ class CrossEncoderReranker(Reranker):
         max_length: int = DEFAULT_MAX_LENGTH,
         batch_size: int = DEFAULT_BATCH_SIZE,
         encoder: CrossEncoderLike | None = None,
+        dtype: str = DEFAULT_DTYPE,
     ) -> None:
         self._model = model
         self._device = device
         self._max_length = max_length
         self._batch_size = batch_size
+        self._dtype = dtype
         self._encoder = encoder
         self._load_lock = asyncio.Lock()
         self._predict_lock = asyncio.Lock()
@@ -229,12 +244,53 @@ class CrossEncoderReranker(Reranker):
         logger.info("Loading reranker %s (first use; this can take a while)", self._model)
 
         try:
-            return CrossEncoder(self._model, device=self._device, max_length=self._max_length)
+            return CrossEncoder(
+                self._model,
+                device=self._device,
+                max_length=self._max_length,
+                model_kwargs=self._model_kwargs(),
+            )
         except Exception as exc:
             # Anything from a failed download to a machine without the memory to hold the
             # weights. All of it means the same thing to a caller: no reranking this run.
             self._load_error = f"Could not load reranker '{self._model}': {exc}"
             raise RerankUnavailableError(self._load_error) from exc
+
+    def _model_kwargs(self) -> dict[str, object]:
+        """The precision to load the weights at, resolved from the device when unset.
+
+        Imported here rather than at module scope because torch is the optional extra this
+        whole class is optional for: a machine without it must still be able to import this
+        module and be told what to install.
+        """
+        import torch
+
+        named = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
+
+        if self._dtype:
+            chosen = named.get(self._dtype)
+
+            if chosen is None:
+                # A typo here would otherwise be a silent fall back to float32 and a reranker
+                # four times slower than the one that was asked for.
+                raise RerankUnavailableError(
+                    f"RERANK_DTYPE '{self._dtype}' is not one of: {', '.join(named)}"
+                )
+        elif self._on_cuda(torch):
+            chosen = torch.float16
+        else:
+            return {}
+
+        logger.info("Loading reranker weights as %s", chosen)
+
+        return {"dtype": chosen}
+
+    def _on_cuda(self, torch: object) -> bool:
+        """Whether the encoder will end up on a GPU, including when the device was left to it."""
+        if self._device:
+            return self._device.startswith("cuda")
+
+        return bool(torch.cuda.is_available())  # type: ignore[attr-defined]
 
     async def is_available(self) -> bool:
         try:

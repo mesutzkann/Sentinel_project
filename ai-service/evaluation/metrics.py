@@ -11,6 +11,12 @@ and one at rank 6 is invisible.
 retrievers that both find the runbook inside five have the same recall@5, and the one that put
 it first is better, because the context builder spends its budget from the top down.
 
+*Success@k* — did anything relevant appear in the top k at all. The question "is the first
+result right?", which recall cannot answer here: a query with two relevant documents caps
+recall@1 at 0.5 however good the retriever is, so a recall@1 of 0.65 over this query set is
+much closer to its ceiling (0.78, given the labels) than the number looks. Success@1 says the
+same thing without the ceiling in the way.
+
 *Precision@k* — of what was returned, how much was relevant. Low precision is not fatal here
 (an irrelevant chunk costs tokens, not correctness) but a collapse in it is the signature of a
 retriever matching on something incidental, and it is the number that catches a lexical index
@@ -66,6 +72,9 @@ class RetrieverScores:
     recall_at_1: float
     recall_at_3: float
     recall_at_5: float
+    success_at_1: float
+    success_at_3: float
+    success_at_5: float
     mrr: float
     precision_at_5: float
     latency_p50_ms: int
@@ -78,7 +87,8 @@ class RetrieverScores:
         """One line of the comparison table."""
         return (
             f"| {self.retriever} | {self.recall_at_1:.3f} | {self.recall_at_3:.3f} "
-            f"| {self.recall_at_5:.3f} | {self.mrr:.3f} | {self.precision_at_5:.3f} "
+            f"| {self.recall_at_5:.3f} | {self.success_at_1:.3f} | {self.success_at_5:.3f} "
+            f"| {self.mrr:.3f} | {self.precision_at_5:.3f} "
             f"| {self.latency_p50_ms} | {self.latency_p95_ms} | {len(self.misses)} |"
         )
 
@@ -128,6 +138,31 @@ def reciprocal_rank(retrieved: Sequence[str], relevant: Iterable[str]) -> float:
     return 0.0
 
 
+def success_at_k(retrieved: Sequence[str], relevant: Iterable[str], k: int) -> float:
+    """1.0 if anything relevant is in the first ``k`` results, else 0.0.
+
+    Averaged over a query set this is the hit rate — the share of questions the retrieval
+    answered at all. It is the number to quote when someone asks how often retrieval is right,
+    and the number recall is mistaken for.
+    """
+    wanted = set(relevant)
+
+    return 1.0 if wanted.intersection(retrieved[:k]) else 0.0
+
+
+def recall_ceiling(outcomes: list[QueryOutcome]) -> float:
+    """The highest recall@1 these labels allow.
+
+    A query with two relevant documents cannot score above 0.5 at k=1, so the mean of
+    ``1 / len(relevant)`` is the ceiling for the set. Reported next to recall@1 because a number
+    without its maximum is not a measurement.
+    """
+    if not outcomes:
+        return 0.0
+
+    return _mean(1.0 / len(o.relevant) for o in outcomes if o.relevant)
+
+
 def summarize(outcomes: list[QueryOutcome]) -> RetrieverScores:
     """Average the per-query numbers into the row that goes in the comparison table."""
     if not outcomes:
@@ -148,6 +183,9 @@ def summarize(outcomes: list[QueryOutcome]) -> RetrieverScores:
         recall_at_1=_mean(recall_at_k(o.retrieved, o.relevant, 1) for o in outcomes),
         recall_at_3=_mean(recall_at_k(o.retrieved, o.relevant, 3) for o in outcomes),
         recall_at_5=_mean(recall_at_k(o.retrieved, o.relevant, 5) for o in outcomes),
+        success_at_1=_mean(success_at_k(o.retrieved, o.relevant, 1) for o in outcomes),
+        success_at_3=_mean(success_at_k(o.retrieved, o.relevant, 3) for o in outcomes),
+        success_at_5=_mean(success_at_k(o.retrieved, o.relevant, 5) for o in outcomes),
         mrr=_mean(reciprocal_rank(o.retrieved, o.relevant) for o in outcomes),
         precision_at_5=_mean(precision_at_k(o.retrieved, o.relevant, 5) for o in outcomes),
         latency_p50_ms=_percentile(latencies, 50),
@@ -157,14 +195,14 @@ def summarize(outcomes: list[QueryOutcome]) -> RetrieverScores:
 
 
 def comparison_table(scores: list[RetrieverScores]) -> str:
-    """The four retrievers side by side, as Markdown.
+    """Every measured retriever side by side, as Markdown.
 
     Ordered by recall@5 rather than by the order they were run, because the question the table
     answers is which one to use.
     """
     header = (
-        "| retriever | R@1 | R@3 | R@5 | MRR | P@5 | p50 ms | p95 ms | misses |\n"
-        "|---|---|---|---|---|---|---|---|---|"
+        "| retriever | R@1 | R@3 | R@5 | S@1 | S@5 | MRR | P@5 | p50 ms | p95 ms | misses |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|"
     )
     rows = [s.as_row() for s in sorted(scores, key=lambda s: -s.recall_at_5)]
 
