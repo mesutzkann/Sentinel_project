@@ -1,5 +1,5 @@
 # Linux and macOS convenience targets. On Windows use scripts/dev.ps1, which does the same thing.
-.PHONY: up down reset backend frontend samples build
+.PHONY: up down reset backend frontend samples build eval
 
 up:
 	docker compose --profile core up -d
@@ -23,6 +23,11 @@ frontend:
 # have to be named or compose rejects the project.
 samples:
 	docker compose --profile core --profile samples up -d --build
+
+# The retrieval benchmark. Needs an ingested corpus and Ollama; the fourth retriever needs the
+# optional `.[rerank]` extra, and the run says so rather than reporting three rows as four.
+eval:
+	cd ai-service && .venv/bin/python -m evaluation.rag_eval --output ../datasets/evaluation/last_run.json
 
 build:
 	dotnet build backend/Sentinel.sln --warnaserror
