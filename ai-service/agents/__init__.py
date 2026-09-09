@@ -7,11 +7,29 @@ from agents.context import (
     InvestigationContext,
     ToolBudgetExhaustedError,
 )
+from agents.state_machine import (
+    AgentEvent,
+    EventType,
+    Node,
+    RunResult,
+    StateMachine,
+    Transition,
+)
+from agents.states import COLLECTOR_STATES, TERMINAL_STATES, State
 
 __all__ = [
+    "COLLECTOR_STATES",
+    "TERMINAL_STATES",
+    "AgentEvent",
+    "EventType",
     "EvidenceItem",
     "EvidenceSource",
     "Hypothesis",
     "InvestigationContext",
+    "Node",
+    "RunResult",
+    "State",
+    "StateMachine",
     "ToolBudgetExhaustedError",
+    "Transition",
 ]

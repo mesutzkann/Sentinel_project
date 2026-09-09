@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from agents.states import State
 from routing.schema import RouteDecision
 
 # From docs/planning.md §7. A budget rather than a timeout because the expensive thing is a tool
@@ -119,6 +120,12 @@ class InvestigationContext:
     # — a run that fails during routing still gets a timeline.
     route: RouteDecision | None = None
 
+    # What PLAN turned the route into: the collector states still to run, in order. The route is
+    # the router's opinion and this is the decision, and they are kept apart because the timeline
+    # should be able to show a question that was routed one way and planned another — which is
+    # what happens when a collector's server is unreachable.
+    plan: list[State] = field(default_factory=list)
+
     evidence: list[EvidenceItem] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
 
@@ -131,6 +138,12 @@ class InvestigationContext:
     # Free text the nodes leave for each other and for the timeline, e.g. why a collector came
     # back empty. Not evidence: a note is about the investigation, evidence is about the system.
     notes: list[str] = field(default_factory=list)
+
+    # Bookkeeping a node needs across its own repeat visits. VALIDATE is the reason it exists:
+    # the rule is "on the second failure, stop", and a node that runs twice cannot count its own
+    # runs. Generic rather than a named field per node, so a node's private counter does not
+    # become part of the shared vocabulary every other node reads.
+    counters: dict[str, int] = field(default_factory=dict)
 
     @property
     def target_service(self) -> str | None:
@@ -175,6 +188,33 @@ class InvestigationContext:
 
     def note(self, message: str) -> None:
         self.notes.append(message)
+
+    def advance(self) -> State | None:
+        """Take the next collector off the plan, or ``None`` when the plan is finished.
+
+        Consuming rather than indexing is what makes the back-loop safe: when
+        COLLECT_ADDITIONAL_EVIDENCE re-queues a collector it pushes onto the plan, and a
+        collector that has already run is not run again unless something explicitly asked for it.
+        """
+        if not self.plan:
+            return None
+
+        return self.plan.pop(0)
+
+    def requeue(self, state: State) -> None:
+        """Put a collector back on the front of the plan.
+
+        Used by COLLECT_ADDITIONAL_EVIDENCE when a hypothesis is missing a signal. Front rather
+        than back because the thing that asked for it is waiting on it, and the rest of the plan
+        was already judged less urgent than reaching a hypothesis at all.
+        """
+        self.plan.insert(0, state)
+
+    def bump(self, name: str) -> int:
+        """Increment a node's own counter and return the new value."""
+        self.counters[name] = self.counters.get(name, 0) + 1
+
+        return self.counters[name]
 
     def begin_iteration(self) -> bool:
         """Start another pass through the collectors, if there is one left.

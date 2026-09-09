@@ -46,6 +46,7 @@ packages = [
     "rag",
     "routing",
     "agents",
+    "agents.nodes",
     "evaluation",
 ]
 
