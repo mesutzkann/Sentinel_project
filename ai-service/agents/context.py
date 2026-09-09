@@ -31,6 +31,11 @@ from routing.schema import RouteDecision
 DEFAULT_TOOL_BUDGET = 25
 DEFAULT_MAX_ITERATIONS = 3
 
+# Minutes of history the collectors ask for. Thirty because the chaos scenarios are enabled and
+# then loaded against for a few minutes: long enough to contain the whole of one, short enough
+# that a healthy period before it does not dilute the rates being measured.
+DEFAULT_WINDOW_MINUTES = 30
+
 
 class ToolBudgetExhaustedError(RuntimeError):
     """The investigation asked for a tool call it could not afford.
@@ -128,6 +133,11 @@ class InvestigationContext:
 
     evidence: list[EvidenceItem] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
+
+    # How far back the collectors look. Per investigation rather than a constant, because an
+    # incident raised three hours after it started needs a window that reaches it, and every
+    # collector has to use the same one or the signals it gathers are not about the same period.
+    window_minutes: int = DEFAULT_WINDOW_MINUTES
 
     tool_budget: int = DEFAULT_TOOL_BUDGET
     tool_calls_made: int = 0
