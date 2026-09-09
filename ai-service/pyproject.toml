@@ -44,6 +44,8 @@ packages = [
     "reporting",
     "mcp_client",
     "rag",
+    "routing",
+    "agents",
     "evaluation",
 ]
 
