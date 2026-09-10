@@ -18,6 +18,27 @@ answer is not a measurement of anything.
 reads; constraining them would be constraining the only place the agent gets to be useful. The
 one field with a vocabulary is ``category``, and even that one degrades to ``None`` rather than
 failing — see :mod:`agents.categories`.
+
+**Every field is required, and none of them started that way.** ``category`` and ``evidence``
+originally carried defaults, which is the ordinary Python choice and reads as the forgiving one:
+a model that omits a field gets the default instead of a validation error. It is the wrong choice
+here, because these classes are not only validators — they are the grammar constrained decoding
+generates against, and a field with a default is absent from the schema's ``required`` list, so
+the grammar *permits* the model to skip the key. A model that follows the grammar strictly then
+does exactly that.
+
+The agent benchmark measured it: qwen2.5:7b-instruct returned ``category: null`` on all seventeen
+chances while writing the right code into the ``title`` field — one root cause was titled
+literally ``DB_DEADLOCK``. It looked like a model that could not categorise. It was a model that
+had been told it did not have to. The same absence applied to ``evidence``, which is worse and
+quieter: no citations means no evidence support, and evidence support is 45% of the confidence
+score.
+
+So every field is required and the nullable ones stay nullable. "I do not know" is still
+expressible — it is ``null``, which the prompt asks for by name — but it now has to be *said*
+rather than left out. The cost is that a provider without constrained decoding can fail
+validation on a missing key, which spends a repair round trip; the repair message names the field,
+which is the cheapest kind of retry there is.
 """
 
 from __future__ import annotations
@@ -53,14 +74,12 @@ class ProposedHypothesis(BaseModel):
     )
 
     description: str = Field(
-        default="",
         description=(
             "Two or three sentences: the mechanism, and how it produces the observed symptoms."
         ),
     )
 
     category: str | None = Field(
-        default=None,
         description=(
             "The scenario code this matches, or null when none of them fits. Never guess the "
             "nearest one."
@@ -68,16 +87,15 @@ class ProposedHypothesis(BaseModel):
     )
 
     confidence: float = Field(
-        default=0.5,
         ge=0.0,
         le=1.0,
         description="How plausible this is compared with the other hypotheses in this list.",
     )
 
     evidence: list[int] = Field(
-        default_factory=list,
         description=(
-            "Indices of the numbered evidence items that support this, and only those that do."
+            "Indices of the numbered evidence items that support this, and only those that do. "
+            "An empty list when nothing collected supports it."
         ),
     )
 
@@ -108,7 +126,6 @@ class RootCauseStatement(BaseModel):
     title: str = Field(description="One line a human can read as the answer.")
 
     category: str | None = Field(
-        default=None,
         description="The scenario code, or null when none of them fits.",
     )
 
@@ -120,7 +137,6 @@ class RootCauseStatement(BaseModel):
     )
 
     evidence: list[int] = Field(
-        default_factory=list,
         description="Indices of the evidence items this explanation actually rests on.",
     )
 
@@ -142,24 +158,20 @@ class CriticVerdict(BaseModel):
     )
 
     confidence: float = Field(
-        default=0.5,
         ge=0.0,
         le=1.0,
         description="How strongly the evidence supports it, independent of whether it is valid.",
     )
 
     concerns: list[str] = Field(
-        default_factory=list,
         description="What weakens the conclusion, one short line each. Empty only if nothing does.",
     )
 
     unsupported_claims: list[str] = Field(
-        default_factory=list,
         description="Statements in the explanation that no cited evidence backs.",
     )
 
     alternative: str | None = Field(
-        default=None,
         description="A better explanation of the same evidence, when there is one. Else null.",
     )
 
@@ -176,7 +188,6 @@ class ProposedAction(BaseModel):
     )
 
     tool_name: str | None = Field(
-        default=None,
         description="The MCP tool that would carry this out, when one exists. Otherwise null.",
     )
 
