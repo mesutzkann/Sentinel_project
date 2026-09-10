@@ -1,0 +1,60 @@
+{
+  "id": "R05",
+  "scenario": "NULL_REFERENCE_EXCEPTION",
+  "expected_category": "NULL_REFERENCE_EXCEPTION",
+  "incident_code": "INC-00146",
+  "service": "payments",
+  "query": "some payments are failing instantly since this morning, what changed",
+  "discriminator": "Fast failures on a subset of requests with latency unaffected, and a recent commit on the file in the stack trace.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.8,
+      "summary": "recent errors: 214 in the last 30 minutes — 'System.NullReferenceException: Object reference not set to an instance of an object' at PaymentProcessor.cs:88",
+      "raw": {"found": 214}
+    },
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_exception_statistics",
+      "weight": 0.8,
+      "summary": "exception types: 1 in the last 30 minutes — NullReferenceException 214, all on POST /payments with currency codes outside the mapped set",
+      "raw": {"found": 1}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.6,
+      "summary": "error rate in the last 30 minutes: payments stepped from 0.1% to 6.2% at 09:14 and has stayed there",
+      "raw": {"services": {"payments": 0.062}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): payments p50=190 p95=240 p99=310, unchanged from yesterday",
+      "raw": {"services": {"payments": {"p50": 190, "p95": 240, "p99": 310}}}
+    },
+    {
+      "source": "git",
+      "tool": "git-mcp/get_recent_commits",
+      "weight": 0.8,
+      "summary": "commits: 3 in the last 30 minutes — a1b2c3d map currency codes in PaymentProcessor; 77de210 update readme; 04c9f31 bump test timeout",
+      "raw": {"found": 3}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_connection_count",
+      "weight": 0.6,
+      "summary": "database connections: 44 of 200 used, 156 spare",
+      "raw": {"used": 44, "max_connections": 200, "headroom": 156}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook unhandled-exception: an error rate that steps up and stays up while latency is unchanged points at a code path reached by a subset of requests",
+      "raw": {"path": "runbooks/unhandled-exception.md"}
+    }
+  ]
+}

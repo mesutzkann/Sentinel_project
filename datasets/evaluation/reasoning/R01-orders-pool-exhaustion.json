@@ -1,0 +1,53 @@
+{
+  "id": "R01",
+  "scenario": "DB_CONNECTION_POOL_EXHAUSTION",
+  "expected_category": "DB_CONNECTION_POOL_EXHAUSTION",
+  "incident_code": "INC-00142",
+  "service": "orders",
+  "query": "orders is returning timeouts, find out why",
+  "discriminator": "Latency is high and the errors are timeouts; the pool is pinned at its maximum and a commit lowered it.",
+  "evidence": [
+    {
+      "source": "database",
+      "tool": "database-mcp/get_connection_count",
+      "weight": 0.9,
+      "summary": "database connections: 20 of 20 used, 0 spare — no headroom left in the pool",
+      "raw": {"used": 20, "max_connections": 20, "headroom": 0}
+    },
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.8,
+      "summary": "recent errors: 347 in the last 30 minutes — most are 'Npgsql.NpgsqlException: The connection pool has been exhausted' in orders",
+      "raw": {"found": 347}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): orders p50=210 p95=4800 p99=9700",
+      "raw": {"services": {"orders": {"p50": 210, "p95": 4800, "p99": 9700}}}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_locks_and_deadlocks",
+      "weight": 0.4,
+      "summary": "deadlocks since reset: 0; sessions blocked now: 0",
+      "raw": {"deadlocks_since_reset": 0, "current_lock_waits": []}
+    },
+    {
+      "source": "git",
+      "tool": "git-mcp/get_recent_commits",
+      "weight": 0.8,
+      "summary": "commits: 2 in the last 30 minutes — 9f2a1c4 lower orders MaxPoolSize to 20; 3b81de0 bump logging verbosity",
+      "raw": {"found": 2}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook connection-pool-exhaustion: symptoms are timeouts acquiring a connection and a pool pinned at its maximum; check MaxPoolSize against the recent change history",
+      "raw": {"path": "runbooks/connection-pool-exhaustion.md"}
+    }
+  ]
+}

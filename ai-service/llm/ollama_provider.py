@@ -59,8 +59,14 @@ class OllamaLlmProvider(LocalLlmProvider):
         try:
             response = await self._post("/api/chat", payload)
         except httpx.HTTPError as exc:
+            # The type name matters as much as the message, and sometimes more: httpx.ReadTimeout
+            # stringifies to nothing at all, so "Could not reach Ollama at http://localhost:11434:"
+            # was the whole of what a caller saw. A timeout and a refused connection need
+            # different things done about them — raise the limit, or start the runtime — and the
+            # agent benchmark scored a model as broken when it was merely slow because of it.
             raise LlmUnavailableError(
-                f"Could not reach Ollama at {self._base_url}: {exc}"
+                f"Could not reach Ollama at {self._base_url} after {self._timeout:.0f}s: "
+                f"{type(exc).__name__}: {exc}"
             ) from exc
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)

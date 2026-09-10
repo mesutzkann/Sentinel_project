@@ -1,0 +1,53 @@
+{
+  "id": "R04",
+  "scenario": "DB_N_PLUS_ONE_QUERY",
+  "expected_category": "DB_N_PLUS_ONE_QUERY",
+  "incident_code": "INC-00145",
+  "service": "orders",
+  "query": "the order detail page is slower than it was and the database is busy, why",
+  "discriminator": "Many fast queries rather than one slow one: a single trace carries dozens of sibling database spans.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 in the last 30 minutes",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): orders p50=320 p95=900 p99=1400",
+      "raw": {"services": {"orders": {"p50": 320, "p95": 900, "p99": 1400}}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_slowest_spans",
+      "weight": 0.8,
+      "summary": "slowest spans: 10 in the last 30 minutes — one GET /orders/{id} trace contains 63 sibling 'db.query' spans of 3-6ms each",
+      "raw": {"found": 10}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_slow_queries",
+      "weight": 0.8,
+      "summary": "slow statements: 10 in the last 30 minutes — top by total time is 'SELECT * FROM order_lines WHERE order_id = $1' at 178s over 41,000 calls, mean 4ms",
+      "raw": {"found": 10}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_connection_count",
+      "weight": 0.6,
+      "summary": "database connections: 118 of 200 used, 82 spare",
+      "raw": {"used": 118, "max_connections": 200, "headroom": 82}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "architecture orders: the order detail endpoint loads line items with the order; a query per line item means the eager load was dropped",
+      "raw": {"path": "services/orders.md"}
+    }
+  ]
+}

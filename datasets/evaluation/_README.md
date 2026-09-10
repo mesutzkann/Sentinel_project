@@ -62,3 +62,41 @@ overlap rather than retrieval.
 
 Run it with `python -m evaluation.rag_eval` from `ai-service/`, against an ingested knowledge
 base. `--help` lists the options; `ai-service/evaluation/metrics.py` defines the metrics.
+
+## `reasoning/*.json`
+
+Five incidents' worth of evidence, one file each, for the agent-model benchmark
+(`ai-service/evaluation/reasoning_eval.py`). One per implemented chaos scenario — 1 to 5 in
+`sample-services/chaos/scenarios.md` — each holding the question, the service, the scenario code
+the agent is expected to reach, and six or seven evidence items in the exact shape
+`agents/nodes/collectors.py` produces them:
+
+```json
+{"id": "R03", "scenario": "DB_DEADLOCK", "expected_category": "DB_DEADLOCK",
+ "incident_code": "INC-00144", "service": "payments",
+ "query": "payments keeps failing and then recovering, what is causing it",
+ "discriminator": "Errors are intermittent and self-recovering, and the database reports blocked/blocking pairs.",
+ "evidence": [{"source": "database", "tool": "database-mcp/get_locks_and_deadlocks", "weight": 0.8,
+               "summary": "deadlocks since reset: 14; sessions blocked now: 2 — ...", "raw": {}}]}
+```
+
+**The evidence is frozen on purpose, and that is what separates this from the Phase 11 agent
+benchmark.** `agent_eval.py` enables a real scenario and scores the whole system, so its numbers
+move when a tool, the load generator or Loki changes. These cases hold the facts still and vary
+only the model, which is what makes "3B or 7B" a question with an answer: a model that concludes
+wrongly here did so from evidence that contained the right answer.
+
+Each case carries the scenario's own *discriminator* — the signal that separates it from the
+scenario it is most easily confused with — and the evidence is written so that discriminator is
+present. R02 has no errors at all and one statement dominating total time; R04 has no errors and
+dozens of fast queries in one trace. A case whose evidence did not contain its discriminator
+would be measuring whether the model guesses well, which is the opposite of the thing being
+built.
+
+Every case also carries evidence that is true and unhelpful — a healthy connection count, zero
+deadlocks, unchanged latency — because a real collector run returns those, and a set of facts
+that all point one way measures nothing about a model's ability to weigh them.
+
+`weight` follows the collectors' three values: 0.8 looked and found something, 0.4 looked and
+found nothing, 0.6 a gauge, with 0.9 for a saturation the server itself measured and 0.5 for a
+retrieved document.

@@ -33,8 +33,18 @@ class Settings(BaseSettings):
     # ---- LLM ----
     ollama_base_url: str = "http://localhost:11434"
 
-    # Development default is the 3B model. A 7B at Q4 does not comfortably share 6 GB of VRAM
-    # with the rest of the stack, so 7B is switched on for demos and benchmark runs instead.
+    # The 3B is the default everywhere, including the demo, and that is now measured rather than
+    # assumed. `python -m evaluation.reasoning_eval` over the five implemented chaos scenarios,
+    # on the machine this is developed on (RTX 3060 Laptop, 6 GB):
+    #
+    #   3B: 3 of 5 root causes correct, 97 s and 6 model calls per investigation
+    #   7B: 5.1 GB of weights against 6 GB of VRAM, so Ollama runs it 18% on the CPU. Three of
+    #       the five runs exceeded a 900 s per-call timeout; the two that finished took 260 s
+    #       and 226 s and reached no better conclusion.
+    #
+    # An investigation nobody can sit through is not a demo, so the earlier plan — 3B to develop
+    # against, 7B for demos — is dropped. A 7B needs a card that fits it, and that is a hardware
+    # decision rather than a configuration one.
     llm_model: str = "qwen2.5:3b-instruct"
 
     llm_timeout_seconds: float = 120.0

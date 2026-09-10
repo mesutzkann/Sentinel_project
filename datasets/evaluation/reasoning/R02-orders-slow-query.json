@@ -1,0 +1,60 @@
+{
+  "id": "R02",
+  "scenario": "DB_SLOW_QUERY_MISSING_INDEX",
+  "expected_category": "DB_SLOW_QUERY_MISSING_INDEX",
+  "incident_code": "INC-00143",
+  "service": "orders",
+  "query": "orders got slow this afternoon but nothing is erroring, what is going on",
+  "discriminator": "Slow without errors, and the time sits inside one database span whose statement has no index.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 in the last 30 minutes",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): orders p50=180 p95=3100 p99=5200",
+      "raw": {"services": {"orders": {"p50": 180, "p95": 3100, "p99": 5200}}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.6,
+      "summary": "error rate in the last 30 minutes: orders 0.1%, payments 0.0%, gateway 0.2%",
+      "raw": {"services": {"orders": 0.001}}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_slow_queries",
+      "weight": 0.8,
+      "summary": "slow statements: 10 in the last 30 minutes — top by total time is 'SELECT * FROM orders WHERE customer_email = $1' at 412s over 9,400 calls, mean 44ms, seq scan over 2.1M rows",
+      "raw": {"found": 10}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_slowest_spans",
+      "weight": 0.8,
+      "summary": "slowest spans: 10 in the last 30 minutes — a single 'orders db.query' span accounts for 94% of each slow trace",
+      "raw": {"found": 10}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_connection_count",
+      "weight": 0.6,
+      "summary": "database connections: 34 of 200 used, 166 spare",
+      "raw": {"used": 34, "max_connections": 200, "headroom": 166}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook slow-query-missing-index: a statement that dominates total time with a sequential scan usually means the predicate column has no index",
+      "raw": {"path": "runbooks/slow-query-missing-index.md"}
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "id": "R03",
+  "scenario": "DB_DEADLOCK",
+  "expected_category": "DB_DEADLOCK",
+  "incident_code": "INC-00144",
+  "service": "payments",
+  "query": "payments keeps failing and then recovering, what is causing it",
+  "discriminator": "Errors are intermittent and self-recovering, and the database reports blocked/blocking pairs.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.8,
+      "summary": "recent errors: 62 in the last 30 minutes — '40P01: deadlock detected' naming the payment settlement transaction",
+      "raw": {"found": 62}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_locks_and_deadlocks",
+      "weight": 0.8,
+      "summary": "deadlocks since reset: 14; sessions blocked now: 2 — two transactions hold the same two rows in opposite order",
+      "raw": {"deadlocks_since_reset": 14, "current_lock_waits": [{"blocked": 4411, "blocking": 4407}]}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.6,
+      "summary": "error rate in the last 30 minutes: payments spikes to 4.1% and falls back to 0.2% repeatedly, orders 0.1%",
+      "raw": {"services": {"payments": 0.041}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_failed_traces",
+      "weight": 0.8,
+      "summary": "failed traces: 10 in the last 30 minutes — all on POST /payments/settle",
+      "raw": {"found": 10}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_connection_count",
+      "weight": 0.6,
+      "summary": "database connections: 41 of 200 used, 159 spare",
+      "raw": {"used": 41, "max_connections": 200, "headroom": 159}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook database-deadlock: 40P01 with a self-recovering error rate means two transactions taking the same locks in opposite order; the fix is consistent lock ordering",
+      "raw": {"path": "runbooks/database-deadlock.md"}
+    }
+  ]
+}
