@@ -18,6 +18,7 @@ remembering to check.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -101,10 +102,58 @@ class Hypothesis:
     title: str
     description: str = ""
     category: str | None = None
+
+    # What the model said it thought, and what ranking computed. Kept apart on purpose: the
+    # ranked score is arithmetic over cited evidence, and keeping the model's own number beside
+    # it is what makes "the model was sure and the evidence was thin" visible rather than
+    # averaged away.
+    stated_confidence: float = 0.0
     score: float = 0.0
+
     rank: int = 0
     selected: bool = False
     supporting_evidence: list[int] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RootCause:
+    """The explanation the agent settled on, after the critic had its say.
+
+    Mirrors the backend's ``RootCause`` row. ``confidence`` is computed by
+    :mod:`agents.confidence` and never taken from a model, and ``confidence_breakdown`` travels
+    with it because a score whose terms cannot be inspected is a number a human has to take on
+    faith — which is the opposite of what it is for.
+    """
+
+    title: str
+    explanation: str
+    category: str | None = None
+    hypothesis_title: str | None = None
+    supporting_evidence: list[int] = field(default_factory=list)
+
+    confidence: float = 0.0
+    confidence_breakdown: dict[str, Any] = field(default_factory=dict)
+
+    # What the critic checked and concluded, verbatim. Stored even when the verdict was "valid",
+    # because the concerns it raised while agreeing are the most useful thing on the screen.
+    validator_output: dict[str, Any] | None = None
+    validator_confidence: float | None = None
+
+
+@dataclass(slots=True)
+class Recommendation:
+    """One proposed action. Advisory here; Phase 10 is what makes it executable.
+
+    ``requires_approval`` defaults to True and no node in this phase sets it False. A
+    recommendation that touches a running service needs a human, and the agent is not the place
+    that decision gets made.
+    """
+
+    action_code: str
+    description: str
+    tool_name: str | None = None
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    requires_approval: bool = True
 
 
 @dataclass(slots=True)
@@ -134,6 +183,17 @@ class InvestigationContext:
     evidence: list[EvidenceItem] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
 
+    # Filled in by SELECT_ROOT_CAUSE and completed by VALIDATE. Present even on a run that ends
+    # in NEEDS_HUMAN for want of confidence: the conclusion the agent would not stand behind is
+    # exactly what the human is being asked to look at.
+    root_cause: RootCause | None = None
+    recommendations: list[Recommendation] = field(default_factory=list)
+
+    # What the critic objected to, carried back into the next round of hypotheses. Separate from
+    # `notes` because these are addressed to the model rather than to a reader, and a generation
+    # prompt that swallowed every note would be reading the investigation's diary.
+    critic_feedback: list[str] = field(default_factory=list)
+
     # How far back the collectors look. Per investigation rather than a constant, because an
     # incident raised three hours after it started needs a window that reaches it, and every
     # collector has to use the same one or the signals it gathers are not about the same period.
@@ -154,6 +214,19 @@ class InvestigationContext:
     # runs. Generic rather than a named field per node, so a node's private counter does not
     # become part of the shared vocabulary every other node reads.
     counters: dict[str, int] = field(default_factory=dict)
+
+    # Where the run has been, written by the runner. On the context rather than only in the
+    # runner's own tally because COLLECT_ADDITIONAL_EVIDENCE has to know whether a collector has
+    # already run before it sends the machine back to one — asking for a signal that was already
+    # gathered spends budget to learn nothing.
+    visits: Counter[State] = field(default_factory=Counter)
+
+    # What the language model has cost this investigation. The backend's `investigations` row has
+    # these three columns and the Phase 11 dashboard reports them per run, so they are counted
+    # where the calls happen rather than reconstructed later from prediction rows.
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     @property
     def target_service(self) -> str | None:
@@ -191,6 +264,21 @@ class InvestigationContext:
         self.evidence.append(item)
 
         return len(self.evidence) - 1
+
+    def record_llm(self, *, prompt_tokens: int, completion_tokens: int, calls: int = 1) -> None:
+        """Book what a model call cost.
+
+        ``calls`` is more than one when a structured call needed repair attempts: three round
+        trips to get one valid object is three calls' worth of latency and tokens, and recording
+        it as one would make the retry loop free in every report that reads this.
+        """
+        self.llm_calls += calls
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+
+    def has_run(self, state: State) -> bool:
+        """Whether the machine has already been through a state."""
+        return self.visits[state] > 0
 
     def sources_seen(self) -> set[EvidenceSource]:
         """The distinct sources that produced evidence. Feeds the diversity bonus."""

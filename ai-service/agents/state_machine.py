@@ -168,7 +168,11 @@ class StateMachine:
     async def run(self, ctx: InvestigationContext) -> RunResult:
         started = time.perf_counter()
         state = self._start
-        visits: Counter[State] = Counter()
+
+        # The tally lives on the context rather than here. The runner still does not read it —
+        # it counts and nothing else — but a node that needs to know whether a collector has
+        # already run should not have to be told by the node that ran it.
+        visits = ctx.visits
         transitions = 0
 
         while state not in TERMINAL_STATES:
@@ -261,7 +265,9 @@ class StateMachine:
             final_state=final,
             transitions=transitions,
             duration_ms=int((time.perf_counter() - started) * 1000),
-            visits=visits,
+            # A copy: the result is a snapshot of how the run went, and the context it came from
+            # is still writable by whoever asked for the run.
+            visits=Counter(visits),
             failure_reason=reason,
         )
 
