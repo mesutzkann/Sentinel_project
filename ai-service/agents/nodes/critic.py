@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 
-from agents.categories import category_or_unknown
 from agents.confidence import (
     ConfidenceScore,
     evidence_support,
@@ -38,6 +37,7 @@ from agents.confidence import (
 )
 from agents.context import InvestigationContext, RootCause
 from agents.nodes.reasoning import ReasoningNode, render_evidence, render_incident
+from agents.payloads import root_cause_payload
 from agents.schemas import CriticVerdict
 from agents.state_machine import AgentEvent, EventType, Transition
 from agents.states import State
@@ -218,25 +218,17 @@ class ValidateNode(ReasoningNode):
         *,
         accepted: bool,
     ) -> AgentEvent:
-        """The one root cause event of the run, emitted only once the score is known."""
+        """The one root cause event of the run, emitted only once the score is known.
+
+        Serialised by :func:`agents.payloads.root_cause_payload`, which is also what the terminal
+        event carries. One function rather than two, because a conclusion that reached the
+        backend twice in two shapes would be a conclusion the frontend could render two ways.
+        """
         return AgentEvent(
             type=EventType.ROOT_CAUSE,
             state=self.state,
             message=root_cause.title,
-            payload={
-                "title": root_cause.title,
-                # The backend requires a category string; "not named" travels as UNKNOWN rather
-                # than as the nearest plausible code. See agents.categories.
-                "category": category_or_unknown(root_cause.category),
-                "explanation": root_cause.explanation,
-                "evidence": root_cause.supporting_evidence,
-                "hypothesis": root_cause.hypothesis_title,
-                "confidence": root_cause.confidence,
-                "confidence_breakdown": root_cause.confidence_breakdown,
-                "validator_confidence": root_cause.validator_confidence,
-                "validator_output": root_cause.validator_output,
-                "accepted_by_critic": accepted,
-            },
+            payload={**root_cause_payload(root_cause), "accepted_by_critic": accepted},
         )
 
     @staticmethod

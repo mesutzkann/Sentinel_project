@@ -192,6 +192,29 @@ async def test_a_failed_tool_becomes_a_note_and_never_evidence() -> None:
     assert (transition.payload or {})["failures"] == ["get_recent_errors"]
 
 
+async def test_every_call_is_recorded_including_the_one_that_failed() -> None:
+    """The backend writes a tool_calls row per attempt, not per fact.
+
+    A collector that reported only the calls which produced evidence would make an investigation
+    that asked two servers and heard from one look like one that only asked one — and the first
+    question about a thin conclusion is what it tried.
+    """
+    client = _FakeClient(
+        {"logs-mcp/get_exception_statistics": SOME_ERRORS},
+        failures={"logs-mcp/get_recent_errors"},
+    )
+    node = CollectLogsNode(client)  # type: ignore[arg-type]
+
+    transition = await node.run(_context())
+    calls = (transition.payload or {})["tool_calls"]
+
+    assert [call["tool"] for call in calls] == ["get_recent_errors", "get_exception_statistics"]
+    assert [call["success"] for call in calls] == [False, True]
+    assert calls[0]["result_summary"] == "server unreachable"
+    assert calls[1]["result_summary"].startswith("exception types: 347")
+    assert calls[1]["args"]["service"] == "orders"
+
+
 async def test_budget_is_spent_for_the_whole_collector_or_not_at_all() -> None:
     """Halfway through is a signal nothing downstream can interpret."""
     client = _FakeClient({})

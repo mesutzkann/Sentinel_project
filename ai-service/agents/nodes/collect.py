@@ -106,11 +106,27 @@ class CollectorNode(Node):
         ctx.spend_tool_call(len(requests))
 
         events: list[AgentEvent] = []
+        calls: list[dict[str, Any]] = []
         found = 0
         failures: list[str] = []
 
         for request in requests:
             result = await self._client.call(request.qualified_name, request.arguments)
+            item = self.summarise(result) if result.success else None
+            # Every call, including the ones that failed and the ones that said nothing. This is
+            # what the backend's `tool_calls` rows are written from, and a collector that only
+            # reported the calls which produced evidence would make an investigation that asked
+            # six servers and heard from two look like one that only asked two.
+            calls.append(
+                {
+                    "server": result.server,
+                    "tool": result.tool,
+                    "args": request.arguments,
+                    "success": result.success,
+                    "latency_ms": result.latency_ms,
+                    "result_summary": item.summary if item is not None else result.error,
+                }
+            )
 
             if not result.success:
                 note = f"{request.qualified_name} failed: {result.error}"
@@ -118,8 +134,6 @@ class CollectorNode(Node):
                 failures.append(request.tool)
                 logger.warning("collector %s: %s", self.state, note)
                 continue
-
-            item = self.summarise(result)
 
             if item is None:
                 continue
@@ -149,6 +163,7 @@ class CollectorNode(Node):
             events=tuple(events),
             payload={
                 "tools_called": [r.qualified_name for r in requests],
+                "tool_calls": calls,
                 "evidence_added": found,
                 "failures": failures,
                 "budget_remaining": ctx.budget_remaining,
