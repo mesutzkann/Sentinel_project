@@ -37,3 +37,25 @@ export function formatAbsolute(iso: string): string {
     timeStyle: 'medium',
   });
 }
+
+/**
+ * A span of milliseconds, at the precision the number deserves.
+ *
+ * Step durations run from a few hundred milliseconds for a tool call to minutes for an
+ * investigation, and one format across that range is either noise at the top or a rounding error
+ * at the bottom.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+
+  return `${minutes}m ${seconds}s`;
+}

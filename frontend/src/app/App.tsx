@@ -6,6 +6,8 @@ import { LoginPage } from '../features/auth/LoginPage';
 import { useAuthStore } from '../features/auth/authStore';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { IncidentsPage } from '../features/incidents/IncidentsPage';
+import { InvestigationPage } from '../features/investigations/InvestigationPage';
+import { InvestigationsPage } from '../features/investigations/InvestigationsPage';
 import { McpToolsPage } from '../features/mcp/McpToolsPage';
 import { ServicesPage } from '../features/services/ServicesPage';
 
@@ -76,6 +78,8 @@ function AuthGate() {
       <Route element={<Layout />}>
         <Route index element={<DashboardPage />} />
         <Route path="incidents" element={<IncidentsPage />} />
+        <Route path="investigations" element={<InvestigationsPage />} />
+        <Route path="investigations/:id" element={<InvestigationPage />} />
         <Route path="services" element={<ServicesPage />} />
         <Route path="mcp" element={<McpToolsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

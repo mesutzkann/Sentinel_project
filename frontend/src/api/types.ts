@@ -74,3 +74,148 @@ export interface ProblemDetails {
   status?: number;
   errors?: Record<string, string[]>;
 }
+
+// ---------------------------------------------------------------- investigations ----
+
+/**
+ * Nullable fields are *absent* rather than null on the wire: the API is configured with
+ * `DefaultIgnoreCondition = WhenWritingNull`. They are typed `| null` here to match the rest of
+ * this file, and every consumer checks for a value rather than for `null` specifically.
+ */
+
+export type InvestigationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type EvidenceSource =
+  | 'logs'
+  | 'metrics'
+  | 'traces'
+  | 'git'
+  | 'database'
+  | 'source_code'
+  | 'docker'
+  | 'historical_incident'
+  | 'rag_document';
+
+export type RecommendationStatus =
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'executing'
+  | 'executed'
+  | 'verified'
+  | 'failed';
+
+export interface InvestigationDto {
+  id: string;
+  incident_id: string;
+  incident_code: string;
+  query: string;
+  router_intent: string | null;
+  status: InvestigationStatus;
+  started_at: string;
+  completed_at: string | null;
+  total_duration_ms: number | null;
+  llm_calls: number;
+  tool_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** Why it stopped. Present on a completed run that would not stand behind its conclusion. */
+  failure_reason: string | null;
+  root_cause_title: string | null;
+  root_cause_category: string | null;
+  confidence: number | null;
+  step_count: number;
+  evidence_count: number;
+}
+
+export interface InvestigationStepDto {
+  id: string;
+  /** The agent's event number. Monotonic but not contiguous — evidence events consume numbers too. */
+  sequence: number;
+  state: string;
+  message: string;
+  payload: Record<string, unknown> | null;
+  duration_ms: number | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface EvidenceDto {
+  id: string;
+  step_id: string | null;
+  source: EvidenceSource;
+  summary: string;
+  weight: number;
+  /** The tool output behind the summary. Arrives with the final payload, not with the event. */
+  raw: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface HypothesisDto {
+  id: string;
+  title: string;
+  description: string | null;
+  score: number;
+  /** 0 means superseded: it was ranked in a round the critic sent back. */
+  rank: number;
+  is_selected: boolean;
+}
+
+export interface RootCauseDto {
+  id: string;
+  hypothesis_id: string | null;
+  title: string;
+  category: string;
+  confidence: number;
+  explanation: string | null;
+  validator_output: CriticVerdict | null;
+  validator_confidence: number | null;
+}
+
+/** What the critic checked and concluded, as `agents/schemas.py` writes it. */
+export interface CriticVerdict {
+  supporting_evidence: number[];
+  contradicting_evidence: number[];
+  unsupported_claims: string[];
+  concerns: string[];
+  alternative: string | null;
+  valid: boolean;
+  confidence: number;
+}
+
+export interface RecommendationDto {
+  id: string;
+  root_cause_id: string;
+  action_code: string;
+  description: string;
+  tool_name: string | null;
+  tool_args: Record<string, unknown> | null;
+  requires_approval: boolean;
+  status: RecommendationStatus;
+}
+
+export interface ToolCallDto {
+  id: string;
+  step_id: string | null;
+  server: string;
+  tool: string;
+  result_summary: string | null;
+  success: boolean;
+  latency_ms: number;
+  called_at: string;
+}
+
+export interface InvestigationDetailDto {
+  investigation: InvestigationDto;
+  steps: InvestigationStepDto[];
+  evidence: EvidenceDto[];
+  hypotheses: HypothesisDto[];
+  root_cause: RootCauseDto | null;
+  recommendations: RecommendationDto[];
+  tool_calls: ToolCallDto[];
+}
+
+export interface StartInvestigationBody {
+  query?: string | null;
+  service_hint?: string | null;
+}
