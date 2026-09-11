@@ -14,6 +14,7 @@
     frontend  Run the Vite dev server on http://localhost:5173.
     samples   Build and start the five sample microservices.
     build     Build everything and fail on any warning.
+    demo      Break orders for real and watch the agent investigate it. Needs the whole stack up.
 
 .EXAMPLE
     ./scripts/dev.ps1 up
@@ -21,7 +22,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('up', 'down', 'reset', 'backend', 'frontend', 'samples', 'build')]
+    [ValidateSet('up', 'down', 'reset', 'backend', 'frontend', 'samples', 'build', 'demo')]
     [string]$Task
 )
 
@@ -73,6 +74,18 @@ switch ($Task) {
         # postgres lives in the core profile, and every sample depends on it, so both
         # profiles have to be named or compose rejects the project.
         docker compose --profile core --profile samples up -d --build
+    }
+
+    'demo' {
+        # The AI service's virtual environment, because that is where httpx already is and the
+        # demo is not worth a second one.
+        $python = Join-Path $root 'ai-service/.venv/Scripts/python.exe'
+
+        if (-not (Test-Path $python)) {
+            throw "No virtual environment at $python. See the AI service section of the README."
+        }
+
+        & $python (Join-Path $root 'scripts/demo.py') @args
     }
 
     'build' {

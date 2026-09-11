@@ -7,8 +7,9 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 6 of 12.** Foundation, observability, the local LLM layer, the MCP tool
-> surface, hybrid retrieval and its reranker. See
+> **Status: Phase 7 of 12.** Foundation, observability, the local LLM layer, the MCP tool
+> surface, hybrid retrieval and its reranker — and the investigation agent, which uses all of
+> them. `make demo` breaks a service for real and watches the agent work out what happened. See
 > [docs/planning.md](docs/planning.md) for the full roadmap and
 > [Phase status](#phase-status) for what works today.
 
@@ -86,6 +87,46 @@ To run the sample services as well:
 docker compose --profile core --profile samples up -d --build
 curl http://localhost:8080/api/services/health
 ```
+
+## The demo
+
+One command, about three and a half minutes, and nothing is simulated:
+
+```bash
+make demo                 # or: ./scripts/dev.ps1 demo
+```
+
+It resets the estate, drives healthy traffic, drops `orders`' connection pool from 200 to 20
+while the load continues, raises an incident in the words a person would use — *"orders is timing
+out, find out why"* — and hands it to the agent. **The scenario code appears nowhere in the
+question, the hint or the evidence.** The only route to the answer is the telemetry the failure
+produced.
+
+A run on the machine this was built on, with the 3B:
+
+```text
+[3/6] Enabling DB_CONNECTION_POOL_EXHAUSTION on orders
+      1560 served, 1716 failed (52%) - timeouts waiting for a connection
+
+[5/6] Investigating
+         3s  PLAN                  FULL_INVESTIGATION on orders: 6 collector(s)
+        12s  COLLECT_DATABASE      COLLECT_DATABASE: 3 fact(s) from 3 call(s)
+        18s  SEARCH_HISTORY        3 document(s) from the knowledge base via hybrid_rerank
+        30s  RANK_HYPOTHESES       4 ranked; 'Connection Pool Exhaustion' leads at 0.95, by 0.02
+        36s  VALIDATE              the critic accepts the conclusion; confidence 0.79
+        43s  RECOMMEND_FIX         3 recommendation(s), all requiring approval
+
+      13 facts over 7 sources, 10 tool calls, 4 model calls, 42s
+      DB_CONNECTION_POOL_EXHAUSTION  (correct)  confidence 0.79
+```
+
+The load matters more than it looks. At 60 concurrent requests the shrunken pool is merely busy:
+everything queues, everything succeeds, and the agent correctly investigates an incident that is
+not happening. The demo drives 150, which is above the measured knee at ~120, and the pool
+produces the timeouts the scenario is recognised by.
+
+Watch it fill in at <http://localhost:5173/investigations>, or read the same run over HTTP at
+`GET /api/investigations/{id}`.
 
 ## Observability
 
@@ -519,8 +560,8 @@ docs/             Planning, ADRs, architecture notes
 | 4 | MCP infrastructure, read-only tools | **Done** |
 | 5 | Hybrid RAG | **Done** |
 | 6 | Reranker and retrieval evaluation | **Done** |
-| 7 | Investigation agent | Next |
-| 8 | Fine-tuned router | |
+| 7 | Investigation agent | **Done** |
+| 8 | Fine-tuned router | Next |
 | 9 | Incident memory | |
 | 10 | Human-in-the-loop remediation | |
 | 11 | Evaluation dashboard | |

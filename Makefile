@@ -1,5 +1,5 @@
 # Linux and macOS convenience targets. On Windows use scripts/dev.ps1, which does the same thing.
-.PHONY: up down reset backend frontend samples build eval
+.PHONY: up down reset backend frontend samples build eval demo
 
 up:
 	docker compose --profile core up -d
@@ -28,6 +28,12 @@ samples:
 # optional `.[rerank]` extra, and the run says so rather than reporting three rows as four.
 eval:
 	cd ai-service && .venv/bin/python -m evaluation.rag_eval --output ../datasets/evaluation/last_run.json
+
+# Breaks orders for real, raises an incident in a person's words, and investigates it. Needs
+# the whole stack up: compose, both applications, and Ollama. It starts nothing itself and says
+# what is missing.
+demo:
+	ai-service/.venv/bin/python scripts/demo.py
 
 build:
 	dotnet build backend/Sentinel.sln --warnaserror
