@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from routing.rule_router import _PLANS, KNOWN_SERVICES, RuleBasedRouter
+from routing.plans import INTENT_PLANS
+from routing.rule_router import KNOWN_SERVICES, RuleBasedRouter
 from routing.schema import Intent, RouteDecision
 
 
@@ -20,7 +21,7 @@ def test_every_intent_has_a_plan() -> None:
     This is the check that stops the fifteenth intent being added without deciding what the
     agent should do about it.
     """
-    assert set(_PLANS) == set(Intent)
+    assert set(INTENT_PLANS) == set(Intent)
 
 
 @pytest.mark.parametrize(
@@ -121,7 +122,7 @@ def test_every_suggested_tool_is_qualified() -> None:
     unqualified suggestion would be unresolvable exactly where it matters.
     """
     for intent in Intent:
-        _, _, tools = _PLANS[intent]
+        _, _, tools = INTENT_PLANS[intent]
 
         for tool in tools:
             assert tool.count("/") == 1, f"{intent}: {tool}"

@@ -27,6 +27,7 @@ import re
 import unicodedata
 
 from routing.base import Router
+from routing.plans import decide
 from routing.schema import Intent, RouteDecision
 
 # The five sample services. Matched as whole words so "orders" in "reorders" does not count.
@@ -136,60 +137,6 @@ _RULES: tuple[tuple[Intent, tuple[str, ...]], ...] = (
     ),
 )
 
-# Intent -> (requires_rag, requires_mcp, tools). The tools are the ones the scenario table in
-# sample-services/chaos/scenarios.md lists under "Expected tools" for failures of that shape,
-# which is what makes this table checkable against something rather than invented.
-_PLANS: dict[Intent, tuple[bool, bool, tuple[str, ...]]] = {
-    Intent.FULL_INVESTIGATION: (
-        True,
-        True,
-        (
-            "logs-mcp/get_recent_errors",
-            "metrics-mcp/get_error_rate",
-            "metrics-mcp/get_response_time",
-            "traces-mcp/get_failed_traces",
-            "git-mcp/get_recent_commits",
-        ),
-    ),
-    Intent.ERROR_ANALYSIS: (
-        True,
-        True,
-        ("logs-mcp/get_recent_errors", "logs-mcp/get_exception_statistics"),
-    ),
-    Intent.LOG_QUERY: (False, True, ("logs-mcp/get_service_logs", "logs-mcp/search_logs")),
-    Intent.METRIC_QUERY: (False, True, ("metrics-mcp/get_service_metrics",)),
-    Intent.TRACE_QUERY: (False, True, ("traces-mcp/get_recent_traces",)),
-    Intent.PERFORMANCE_ANALYSIS: (
-        True,
-        True,
-        ("metrics-mcp/get_response_time", "traces-mcp/get_slowest_spans"),
-    ),
-    Intent.DATABASE_HEALTH: (
-        True,
-        True,
-        (
-            "database-mcp/get_connection_count",
-            "database-mcp/get_slow_queries",
-            "database-mcp/get_locks_and_deadlocks",
-        ),
-    ),
-    Intent.DEPLOYMENT_CHECK: (False, True, ("git-mcp/get_recent_commits",)),
-    Intent.CODE_LOOKUP: (True, True, ("source-code-mcp/search_code", "source-code-mcp/read_file")),
-    Intent.CONFIG_LOOKUP: (True, True, ("source-code-mcp/search_code",)),
-    Intent.SERVICE_TOPOLOGY: (True, True, ("traces-mcp/get_service_dependencies",)),
-    # No live signal: both are answered from the knowledge base alone.
-    Intent.HISTORICAL_SIMILARITY: (True, False, ()),
-    Intent.KNOWLEDGE_QUESTION: (True, False, ()),
-    Intent.REMEDIATION_QUESTION: (True, False, ()),
-    # Unknown shape, so collect broadly and let the evidence decide.
-    Intent.GENERAL_QUESTION: (
-        True,
-        True,
-        ("logs-mcp/get_recent_errors", "metrics-mcp/get_service_metrics"),
-    ),
-}
-
-
 class RuleBasedRouter(Router):
     """Keyword matching over a normalised query."""
 
@@ -200,16 +147,8 @@ class RuleBasedRouter(Router):
     async def route(self, query: str, *, service_hint: str | None = None) -> RouteDecision:
         normalised = _normalise(query)
         named = _named_services(normalised)
-        intent = _classify(normalised, named)
-        requires_rag, requires_mcp, tools = _PLANS[intent]
 
-        return RouteDecision(
-            intent=intent,
-            requires_rag=requires_rag,
-            requires_mcp=requires_mcp,
-            tools=list(tools),
-            target_service=_service(named, service_hint),
-        )
+        return decide(_classify(normalised, named), _service(named, service_hint))
 
 
 # Turkish letters NFKD does not take apart. The rest — ş, ç, ğ, ö, ü — decompose to an ASCII
