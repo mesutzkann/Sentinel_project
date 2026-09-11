@@ -68,9 +68,13 @@ public sealed class InvestigationStep
     public Investigation? Investigation { get; set; }
 
     /// <summary>
-    /// Monotonic per investigation. Lets the frontend order steps deterministically and lets the
-    /// backend notice a gap when a callback is lost.
+    /// The agent's event number, so steps order deterministically however they arrived.
     /// </summary>
+    /// <remarks>
+    /// Monotonic per investigation but not contiguous here: it numbers every callback event, and
+    /// evidence, hypotheses and the root cause consume numbers between the steps. Unique, which
+    /// is how a redelivered event is recognised - delivery is at-least-once.
+    /// </remarks>
     public int Sequence { get; set; }
 
     /// <summary>State machine state, e.g. <c>COLLECT_LOGS</c>.</summary>

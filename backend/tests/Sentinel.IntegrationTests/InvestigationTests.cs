@@ -405,6 +405,45 @@ public sealed class InvestigationTests
     }
 
     [Fact]
+    public async Task Only_the_last_round_of_hypotheses_is_ranked()
+    {
+        // The critic sends a rejected conclusion back to GENERATE_HYPOTHESES, so one
+        // investigation holds every round it went through — and two hypotheses both claiming
+        // first place is what a real run produced before the final payload was made the last
+        // word on ranking.
+        var client = await _factory.CreateAdminClientAsync();
+        var investigation = await StartAsync(client, (await CreateIncidentAsync(client, "Two rounds")).Id);
+        var callbacks = _factory.CreateCallbackClient(investigation.Id);
+        var url = EventsUrl(investigation.Id);
+
+        await callbacks.PostAsJsonAsync(
+            url,
+            new
+            {
+                sequence = 1,
+                type = "hypothesis",
+                state = "RANK_HYPOTHESES",
+                message = "1. A retry storm (0.88)",
+                payload = new { title = "A retry storm", score = 0.88, rank = 1, selected = true },
+            },
+            SentinelApiFactory.Json);
+
+        await callbacks.PostAsJsonAsync(url, Completed(investigation.Id), SentinelApiFactory.Json);
+
+        var detail = await DetailAsync(client, investigation.Id);
+
+        detail.Hypotheses.Should().HaveCount(3, "the earlier round stays on the record");
+        detail.Hypotheses.Count(h => h.Rank == 1).Should().Be(1);
+        detail.Hypotheses.Count(h => h.IsSelected).Should().Be(1);
+
+        var superseded = detail.Hypotheses.Single(h => h.Title == "A retry storm");
+        superseded.Rank.Should().Be(0, "it led a round that was thrown away");
+        superseded.IsSelected.Should().BeFalse();
+        superseded.Score.Should().Be(0.88m, "what it scored at the time is still what it scored");
+        detail.Hypotheses.Last().Title.Should().Be("A retry storm", "an unranked hypothesis sorts last");
+    }
+
+    [Fact]
     public async Task A_failed_run_reopens_the_incident()
     {
         var client = await _factory.CreateAdminClientAsync();

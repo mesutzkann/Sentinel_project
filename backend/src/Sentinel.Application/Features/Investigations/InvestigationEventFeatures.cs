@@ -47,9 +47,14 @@ public sealed record LlmUsageRecord(
 /// </summary>
 /// <remarks>
 /// <see cref="Sequence"/> is assigned by the agent when the event is emitted rather than when it
-/// is delivered, so a gap means an event was lost rather than reordered (ADR-0006). It is unique
-/// per investigation, which is also how a redelivered event is recognised: delivery is
-/// at-least-once.
+/// is delivered, so it orders the run as it happened and a redelivery is recognisable: delivery
+/// is at-least-once (ADR-0006).
+///
+/// It counts every event, not every step — an evidence event consumes a number too — so the
+/// steps of a healthy investigation are numbered 1, 2, 3, 6, 9, and a gap in the timeline is the
+/// normal case rather than a lost callback. Detecting loss would need every event type stored
+/// with its number, which is not worth a column on four tables to notice something the final
+/// payload repairs anyway.
 /// </remarks>
 public sealed record RecordInvestigationEventCommand(
     Guid InvestigationId,
@@ -463,20 +468,40 @@ public sealed class RecordInvestigationEventHandler
             }
         }
 
+        var ranked = new HashSet<string>();
+
         foreach (var item in result.Array("hypotheses"))
         {
             var title = Text.Truncate(item.String("title"), 300);
 
-            if (title is not null)
+            if (title is null)
             {
-                Upsert(
-                    investigation,
-                    title,
-                    item.String("description"),
-                    item.Decimal("score") ?? 0m,
-                    item.Int("rank") ?? 0,
-                    item.Bool("selected") ?? false);
+                continue;
             }
+
+            ranked.Add(title);
+            var hypothesis = Upsert(
+                investigation,
+                title,
+                item.String("description"),
+                item.Decimal("score") ?? 0m,
+                item.Int("rank") ?? 0,
+                item.Bool("selected") ?? false);
+
+            // The final payload is the last word on selection, where a streamed event is only
+            // the last word so far. A hypothesis that led round one and lost round two must
+            // stop claiming it.
+            hypothesis.IsSelected = item.Bool("selected") ?? false;
+        }
+
+        foreach (var superseded in investigation.Hypotheses.Where(h => !ranked.Contains(h.Title)))
+        {
+            // A rejected conclusion sends the machine back to GENERATE_HYPOTHESES, so one
+            // investigation holds every round it went through. Only the last round is ranked;
+            // the earlier ones keep their scores and drop to rank 0, which sorts them below the
+            // ranking and stops two hypotheses from both claiming first place.
+            superseded.Rank = 0;
+            superseded.IsSelected = false;
         }
 
         if (result.Element("root_cause") is { ValueKind: JsonValueKind.Object } rootCausePayload)
