@@ -17,6 +17,28 @@ of the two the miss is the one that does not claim something untrue.
 ``UNKNOWN`` exists only at the boundary. The backend's ``RootCause.Category`` is a required
 string, so a conclusion the agent would not name has to cross the callback as *something*; it
 crosses as the word for "not named" rather than as the nearest code.
+
+**Making the model name one was tried, measured, and reverted.** Most hypotheses arrive with a
+null category — four of five on the pool scenario, three of four on the null-reference one, where
+the model titled a hypothesis "NullReferenceException due to..." and left the field empty beside
+it. Nothing is being discarded on the way: it writes ``null`` itself. Two changes were built to
+stop it — ``category`` typed as the enum, so the fifteen codes are in the grammar rather than in
+prose, and a ``hypotheses.v2`` that asked for "the code this hypothesis *is*". Category coverage
+went from a quarter to over four fifths, and the null-reference scenario began proposing
+``NULL_REFERENCE_EXCEPTION`` where it never had.
+
+Root cause accuracy fell from three of five to two, twice, and both wrong conclusions now *passed*
+the confidence threshold — an agent that finishes confidently on the wrong diagnosis, which is the
+one outcome this phase exists to prevent. A 3B asked to put a code on every hypothesis spreads
+them across the vague ones too, and the conclusion inherits whichever won. The nulls were
+accidentally protective: the model named a code for the hypothesis it was sure of, and that one
+was usually right. The enum alone, with the old prompt, measured the same as changing nothing.
+
+So the vocabulary stays in prose and the nulls stay. The cost is real and known: a hypothesis with
+no category cannot be matched against ``CATEGORY_SIGNALS``, so the back-loop in
+``COLLECT_ADDITIONAL_EVIDENCE`` almost never fires — every measured run notes "every hypothesis
+rests on a signal that was collected". Worth revisiting with a bigger model, or by asking for the
+category once, for the conclusion, rather than five times for the candidates.
 """
 
 from __future__ import annotations

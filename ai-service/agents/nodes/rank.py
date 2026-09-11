@@ -22,6 +22,26 @@ scores 0.35 and loses to one at 0.6 support that called itself a coin flip.
 
 Ties keep the model's original order, which is its own plausibility ordering, so the ranking is
 stable and reproducible run to run.
+
+**The known bias, and why it is still here.** A hypothesis that cites four facts outscores one
+that cites the single fact which actually decides the case: both terms reward breadth, and
+neither can tell whether a cited fact supports the claim. It was watched happening — on a seeded
+pool-exhaustion run, a retry-storm hypothesis led at 0.87 over pool exhaustion at 0.58 with a
+0.9-weight "20 of 20 connections used" on the table. No reweighting fixes that. Any score built
+from *which* indices were cited and *what* they weigh is monotone in the number of citations, so
+a hypothesis that claims everything wins; separating the claims needs the meaning of the
+sentences, which is the one thing not to put in an arithmetic term. It is the critic's job, and
+[ADR-0007](../../../docs/adr/0007-critic-veto-needs-grounds.md) is that job being made to work.
+
+**And it is not what the wrong conclusions are made of.** Measured over the five scenarios: where
+the correct explanation was among the hypotheses at all, this formula ranked it first in three of
+three. In the two cases the agent gets wrong, the correct category was never proposed — so no
+ordering of what was proposed could have reached it. A distinctiveness term — credit for resting
+on evidence no rival cites, which is the one signal here that does not reward breadth — was
+worked through by hand against those runs: it moves the correct R04 hypothesis from fourth to
+third without changing which one wins, and because it is zero for every hypothesis whenever the
+model cites the same facts twice, it compresses every score and with them the margin the
+confidence score depends on. Cheap to add and likely to cost a completion; not added.
 """
 
 from __future__ import annotations
