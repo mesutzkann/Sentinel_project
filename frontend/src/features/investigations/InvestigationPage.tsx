@@ -7,6 +7,7 @@ import { investigationsApi, queryKeys } from '../../api/endpoints';
 import { formatAbsolute, formatDuration } from '../../lib/time';
 import { EvidencePanel } from './EvidencePanel';
 import { Hypotheses } from './Hypotheses';
+import { InvestigationGraph } from './InvestigationGraph';
 import { RootCause } from './RootCause';
 import { findConfidenceBreakdown } from './confidence';
 import { Timeline } from './Timeline';
@@ -127,6 +128,16 @@ export function InvestigationPage() {
                   : 'This investigation ended without a conclusion.'}
               </section>
             )}
+
+            <section className="panel">
+              <div className="flex items-baseline justify-between border-b border-ink-800 px-5 py-3">
+                <h2 className="text-sm font-medium text-slate-200">How it got there</h2>
+                <span className="text-[11px] text-slate-500">
+                  a fact with no line out of it is one the conclusion does not use
+                </span>
+              </div>
+              <InvestigationGraph steps={steps} evidence={evidence} rootCause={rootCause} />
+            </section>
 
             <section className="panel">
               <h2 className="border-b border-ink-800 px-5 py-3 text-sm font-medium text-slate-200">

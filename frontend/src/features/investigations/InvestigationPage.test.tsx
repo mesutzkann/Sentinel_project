@@ -240,10 +240,30 @@ describe('InvestigationPage', () => {
   it('shows the conclusion, its category and its confidence', async () => {
     renderPage();
 
-    expect(await screen.findByText('The connection pool was reduced to 20')).toBeInTheDocument();
-    expect(screen.getAllByText('DB_CONNECTION_POOL_EXHAUSTION').length).toBeGreaterThan(0);
-    expect(screen.getByText('0.79')).toBeInTheDocument();
-    expect(screen.getByText('above the threshold')).toBeInTheDocument();
+    const card = (await screen.findByText('Root cause')).closest('section');
+    const scoped = within(card as HTMLElement);
+
+    expect(scoped.getByText('The connection pool was reduced to 20')).toBeInTheDocument();
+    expect(scoped.getByText('DB_CONNECTION_POOL_EXHAUSTION')).toBeInTheDocument();
+    expect(scoped.getByText('0.79')).toBeInTheDocument();
+    expect(scoped.getByText('above the threshold')).toBeInTheDocument();
+  });
+
+  it('draws an edge to the conclusion only from the evidence it rests on', async () => {
+    // The facts with no line out of them are the point of the picture: an investigation that
+    // cited everything would be one that discriminated nothing.
+    const { container } = renderPage();
+
+    await screen.findByRole('img', { name: /how the conclusion follows/i });
+
+    const toConclusion = container.querySelectorAll('path[class*="state-ok"]');
+
+    // Two of the three facts are cited; the negative finding is not.
+    expect(toConclusion).toHaveLength(2);
+
+    // The uncited one is drawn and readable — it is on the picture, just not load-bearing.
+    const titles = Array.from(container.querySelectorAll('title')).map((t) => t.textContent);
+    expect(titles).toContain('deadlocks since reset: 0; sessions blocked now: 0');
   });
 
   it('breaks the score into the terms it was computed from', async () => {
