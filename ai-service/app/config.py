@@ -50,8 +50,12 @@ class Settings(BaseSettings):
     # and before the schema and critic work cut a run from 6 model calls to 4.4; which of those
     # explains it has not been established.
     #
-    # Switching the default is the project owner's call and has not been made. What is measured
-    # is that a 7B investigation is a thing a person can sit through on this hardware.
+    # The decision, taken on those numbers: **the 3B to develop against, the 7B to demo with** —
+    # the phase's original plan, which the September measurement had ruled out. A demo run sets
+    # LLM_MODEL=qwen2.5:7b-instruct and LLM_TIMEOUT_SECONDS=300 in .env; the second of those is
+    # not optional, because a 120 s cap against calls that averaged 43 s under contention ends an
+    # investigation in FAILED for being slow, which is the one way to make a good model look
+    # broken.
     llm_model: str = "qwen2.5:3b-instruct"
 
     llm_timeout_seconds: float = 120.0
