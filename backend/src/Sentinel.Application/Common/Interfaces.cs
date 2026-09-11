@@ -76,3 +76,55 @@ public interface ICurrentUser
 
     UserRole? Role { get; }
 }
+
+/// <summary>What the backend asks the AI service to do.</summary>
+/// <remarks>
+/// An interface rather than an <c>HttpClient</c> in the handler so that starting an
+/// investigation can be tested without a Python process: the failure worth covering is the AI
+/// service being unreachable, and that is a test that must not depend on it being reachable.
+/// </remarks>
+public interface IAiServiceClient
+{
+    /// <summary>
+    /// Hands one investigation to the agent and returns as soon as it is accepted.
+    /// </summary>
+    /// <remarks>
+    /// The agent answers 202 and reports every step back through the callback (ADR-0002), so
+    /// this returning says the run started, never what it concluded.
+    /// </remarks>
+    /// <exception cref="AiServiceUnavailableException">The AI service refused or did not answer.</exception>
+    Task StartInvestigationAsync(StartInvestigationRequest request, CancellationToken cancellationToken = default);
+}
+
+/// <summary>The body of <c>POST /investigations</c>, per docs/planning.md §3.1.</summary>
+public sealed record StartInvestigationRequest(
+    Guid InvestigationId,
+    string IncidentCode,
+    string Query,
+    string? ServiceHint,
+    string CallbackUrl,
+    string CallbackToken);
+
+/// <summary>The AI service could not be asked to investigate. Maps to 502.</summary>
+public sealed class AiServiceUnavailableException : SentinelException
+{
+    public AiServiceUnavailableException(string message) : base(message)
+    {
+    }
+}
+
+/// <summary>
+/// Issues and checks the token an investigation's callbacks carry.
+/// </summary>
+/// <remarks>
+/// Per investigation rather than one shared secret, so that a token leaking out of one run does
+/// not let anything write events into another. It is derived rather than stored: an HMAC over
+/// the investigation id keyed with a server secret is verifiable without a table and without a
+/// round trip on every event, and an investigation posts tens of them.
+/// </remarks>
+public interface ICallbackTokenService
+{
+    string Issue(Guid investigationId);
+
+    bool Verify(Guid investigationId, string? token);
+}

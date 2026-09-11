@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Sentinel.Application.Features.Incidents;
+using Sentinel.Application.Features.Investigations;
 using Sentinel.Domain;
 using Sentinel.Infrastructure;
 
@@ -54,6 +55,39 @@ public sealed class IncidentsController : ControllerBase
         UpdateIncidentStatusBody body,
         CancellationToken cancellationToken) =>
         Ok(await _sender.Send(new UpdateIncidentStatusCommand(id, body.Status), cancellationToken));
+
+    /// <summary>Hands the incident to the agent.</summary>
+    /// <remarks>
+    /// 202, not 201: the row exists immediately and the investigation it describes has barely
+    /// started. What it concluded arrives over the callback surface and the SignalR hub, and is
+    /// readable at <c>GET /api/investigations/{id}</c> the whole time.
+    /// </remarks>
+    [HttpPost("{id:guid}/investigate")]
+    [Authorize(Policy = Policies.RequireEngineer)]
+    [ProducesResponseType<InvestigationDto>(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<ActionResult<InvestigationDto>> Investigate(
+        Guid id,
+        InvestigateBody? body,
+        CancellationToken cancellationToken)
+    {
+        var investigation = await _sender.Send(
+            new StartInvestigationCommand(id, body?.Query, body?.ServiceHint), cancellationToken);
+
+        return Accepted($"/api/investigations/{investigation.Id}", investigation);
+    }
 }
+
+/// <param name="Query">
+/// The question to investigate, in the user's words. Omitted, one is composed from the incident:
+/// the router reads this, so a real question routes better than a generated one.
+/// </param>
+/// <param name="ServiceHint">
+/// Which service to look at. Omitted, the incident's own service is used - which is where the
+/// alert fired, not necessarily where the fault is.
+/// </param>
+public sealed record InvestigateBody(string? Query = null, string? ServiceHint = null);
 
 public sealed record UpdateIncidentStatusBody(IncidentStatus Status);

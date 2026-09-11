@@ -3,9 +3,11 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Sentinel.Application.Common;
 using Sentinel.Domain;
+using Sentinel.Infrastructure.Ai;
 using Sentinel.Infrastructure.Auth;
 using Sentinel.Infrastructure.Persistence;
 
@@ -41,7 +43,36 @@ public static class DependencyInjection
 
         services.AddScoped<DbSeeder>();
 
+        AddAiService(services, configuration);
+
         return services;
+    }
+
+    /// <summary>The outbound half of ADR-0002: starting a run, and the token its callbacks carry.</summary>
+    private static void AddAiService(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<AiServiceOptions>()
+            .Bind(configuration.GetSection(AiServiceOptions.SectionName))
+            .Configure(options =>
+            {
+                // The AI service reads AI_SERVICE_URL and BACKEND_BASE_URL out of the
+                // repository's .env, and so does this, rather than the same two addresses being
+                // configured twice in two formats and drifting apart.
+                options.BaseUrl = configuration["AI_SERVICE_URL"] ?? options.BaseUrl;
+                options.CallbackBaseUrl = configuration["BACKEND_BASE_URL"] ?? options.CallbackBaseUrl;
+            });
+
+        services.AddHttpClient(AiServiceClient.HttpClientName)
+            .ConfigureHttpClient((sp, client) =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiServiceOptions>>().Value;
+
+                client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
+                client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+            });
+
+        services.AddScoped<IAiServiceClient, AiServiceClient>();
+        services.AddSingleton<ICallbackTokenService, CallbackTokenService>();
     }
 
     private static void AddJwtAuthentication(IServiceCollection services, IConfiguration configuration)

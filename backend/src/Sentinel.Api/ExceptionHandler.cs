@@ -87,6 +87,11 @@ public sealed class SentinelExceptionHandler : IExceptionHandler
             NotFoundException => (StatusCodes.Status404NotFound, "Not found", null),
             ConflictException => (StatusCodes.Status409Conflict, "Conflict", null),
 
+            // A dependency of ours failed, not the caller's request. 502 rather than 500 so the
+            // frontend can say which part of the stack is down instead of "something broke".
+            AiServiceUnavailableException => (
+                StatusCodes.Status502BadGateway, "The AI service is unavailable", null),
+
             _ => (StatusCodes.Status500InternalServerError, "Internal server error", null),
         };
 }

@@ -24,6 +24,17 @@ pushes it to the browser over SignalR.
 Each investigation is issued a **single-use HMAC callback token** at start time; the backend
 rejects events that do not carry it.
 
+> **Amended in Phase 7.6, when it was built.** The token is per investigation and is *not*
+> single-use. One run posts tens of events with it, so "single use" could only ever have meant
+> "for the life of one run" — and it is not revoked when the run ends either, because the events
+> the emitter buffered are delivered *after* the terminal one and are the events worth keeping
+> most. It is derived rather than stored (HMAC-SHA256 over the investigation id, keyed with
+> `Internal:CallbackSecret` or the internal API key), so it needs no table and no lookup per
+> event. What it buys over one shared secret is containment: a token that escapes one
+> investigation cannot write events into another. It travels in `X-Callback-Token`, which is a
+> different header from the `X-Internal-Token` that guards the rest of the internal surface —
+> two different lifetimes should not share a header name.
+
 ## Consequences
 
 **Positive**

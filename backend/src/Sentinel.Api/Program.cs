@@ -3,7 +3,9 @@ using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using Sentinel.Api;
+using Sentinel.Api.Hubs;
 using Sentinel.Application;
+using Sentinel.Application.Features.Investigations;
 using Sentinel.Infrastructure;
 using Sentinel.Infrastructure.Persistence;
 using Serilog;
@@ -32,6 +34,18 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
     });
+
+// The live timeline. Registered with the same JSON options as the controllers so a step
+// arriving over the hub and the same step read back over HTTP are the same shape.
+builder.Services.AddSignalR()
+    .AddJsonProtocol(options =>
+    {
+        options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+        options.PayloadSerializerOptions.Converters.Add(
+            new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
+    });
+
+builder.Services.AddScoped<IInvestigationNotifier, SignalRInvestigationNotifier>();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<SentinelExceptionHandler>();
@@ -91,6 +105,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<InvestigationsHub>(InvestigationsHub.Path);
 
 app.MapGet("/health", () => Results.Ok(new { status = "up" })).AllowAnonymous();
 

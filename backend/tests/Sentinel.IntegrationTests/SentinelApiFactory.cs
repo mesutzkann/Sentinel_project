@@ -1,10 +1,17 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Sentinel.Application.Common;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -98,12 +105,51 @@ public sealed class SentinelApiFactory : WebApplicationFactory<Program>, IAsyncL
         await base.DisposeAsync();
     }
 
+    /// <summary>
+    /// The AI service, replaced by a recorder.
+    /// </summary>
+    /// <remarks>
+    /// What these tests are about is the backend's half of ADR-0002: that a run is registered,
+    /// that the callback surface writes the rows, and that an unreachable agent leaves something
+    /// a person can read. None of that should need a Python process and a local model, and a
+    /// test that started one would be measuring the model's mood.
+    /// </remarks>
+    public RecordingAiServiceClient AiService { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Development, because that is where the API turns on Swagger and the developer
         // exception page — and where a failure in these tests reads like a failure a developer
         // would see rather than a stripped production error.
         builder.UseEnvironment(Environments.Development);
+
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IAiServiceClient>();
+            services.AddSingleton<IAiServiceClient>(AiService);
+        });
+    }
+
+    /// <summary>
+    /// The callback token for one investigation, computed the way the backend computes it.
+    /// </summary>
+    /// <remarks>
+    /// Recomputed rather than read back from the service under test, so that a change to the
+    /// scheme fails a test instead of passing one that agrees with itself. <c>Internal:ApiKey</c>
+    /// is the key because no <c>Internal:CallbackSecret</c> is configured here, which is also the
+    /// local-stack default.
+    /// </remarks>
+    public static string CallbackToken(Guid investigationId) => Convert.ToBase64String(
+        HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(InternalApiKey),
+            Encoding.UTF8.GetBytes(investigationId.ToString("D"))));
+
+    /// <summary>A client carrying one investigation's callback token, as the AI service would.</summary>
+    public HttpClient CreateCallbackClient(Guid investigationId)
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add("X-Callback-Token", CallbackToken(investigationId));
+        return client;
     }
 
     /// <summary>An unauthenticated client.</summary>
@@ -166,6 +212,31 @@ public sealed class SentinelApiFactory : WebApplicationFactory<Program>, IAsyncL
     }
 
     public sealed record LoginResponse(string AccessToken, string Username, string Role);
+}
+
+/// <summary>
+/// Stands in for the Python agent: records what it was asked, and can refuse.
+/// </summary>
+public sealed class RecordingAiServiceClient : IAiServiceClient
+{
+    public ConcurrentBag<StartInvestigationRequest> Requests { get; } = [];
+
+    /// <summary>When set, every start fails with this message, as an unreachable service would.</summary>
+    public string? FailWith { get; set; }
+
+    public Task StartInvestigationAsync(
+        StartInvestigationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (FailWith is { } reason)
+        {
+            throw new AiServiceUnavailableException(reason);
+        }
+
+        Requests.Add(request);
+
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>
