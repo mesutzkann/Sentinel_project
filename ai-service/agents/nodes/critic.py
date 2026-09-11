@@ -23,6 +23,37 @@ cleared before the machine loops back, so an investigation ends with one root ca
 settled on — rather than a trail of drafts. The critic's objections survive on
 ``ctx.critic_feedback``, which is what the next round of hypotheses is shown; that is the part
 worth keeping, because a rejection nobody tells the model about produces the same answer again.
+
+**Why the prompt is on v2, and what v1 got wrong.** The benchmark over the five implemented
+scenarios found the critic, not the model size, to be what stood between a correct root cause and
+a finished investigation: every run of both the 3B and the 7B ended in NEEDS_HUMAN, and the 3B
+threw out an already-correct conclusion in six of its ten rejections. Three things were wrong
+with asking it that way, and v2 changes all three.
+
+*It asked for fault-finding and got fault-finding.* "Your job is to find what is wrong with it",
+followed by four questions each shaped as a way to disagree. A 3B follows the dominant
+instruction. v2 asks one question instead — does the evidence support this cause better than any
+other explanation of it — and lists the reasons to reject as a closed set.
+
+*It never separated a wrong diagnosis from an overreaching sentence.* Every causal chain has a
+link that is inferred rather than shown, so "is any link asserted rather than shown" is always
+yes, and a model that has just written down a concern is not going to answer "valid" next. v2
+says so explicitly: concerns and unsupported claims are expected on a conclusion it accepts, and
+what they lower is the confidence, not the verdict.
+
+*It decided first and looked afterwards.* ``valid`` was the first field of the schema, and
+constrained decoding fills fields in order. :class:`agents.schemas.CriticVerdict` now asks for
+the supporting and contradicting evidence indices first, so the verdict is the last thing
+generated and has something to follow from — and both lists end up on the screen, where a human
+can check the critic's reading the same way the critic checks the conclusion's.
+
+**What all of that is worth, measured.** Same five scenarios, same model, before and after: the
+same three correct root causes, but **none of the five finished before and two do now**, six
+recommendations where there were none, one rejection where there were ten, and 4.0 model calls
+per investigation instead of 6.0. The runs that concluded wrongly still stop — 0.66 and 0.33,
+below the threshold — and so does a correct one the critic doubted at 0.62. See
+[ADR-0007](../../../docs/adr/0007-critic-veto-needs-grounds.md), and
+``python -m evaluation.reasoning_eval`` to reproduce it.
 """
 
 from __future__ import annotations
@@ -60,6 +91,10 @@ class ValidateNode(ReasoningNode):
 
     prompt_name = "critic"
 
+    # v1 is kept because it is what the 3B and 7B numbers in docs were measured against, and it
+    # is the thing v2 has to beat. See the module docstring for what it got wrong.
+    default_prompt_version = "v2"
+
     @property
     def state(self) -> State:
         return State.VALIDATE
@@ -91,14 +126,26 @@ class ValidateNode(ReasoningNode):
         verdict = result.value
         root_cause.validator_output = verdict.model_dump()
         root_cause.validator_confidence = verdict.confidence
+        overruled = not verdict.valid and not self._grounds(verdict)
 
-        if not verdict.valid:
+        if not verdict.valid and not overruled:
             return self._rejected(ctx, root_cause, verdict, self.usage(result))
+
+        if overruled:
+            reason = (
+                "the critic voted against the conclusion without naming a reason its own rules "
+                f"accept — it cites {verdict.supporting_evidence} as supporting it, nothing as "
+                "contradicting it, and offers no better explanation; the objection is kept as a "
+                "concern and lowers the confidence instead of ending the round"
+            )
+            ctx.note(reason)
+            logger.info("VALIDATE: %s", reason)
 
         score = self._score(ctx, root_cause, verdict)
         payload = {
             **self.usage(result),
             "valid": True,
+            "verdict_overruled": overruled,
             "validator_confidence": verdict.confidence,
             "concerns": verdict.concerns,
             "confidence": score.to_payload(),
@@ -130,6 +177,30 @@ class ValidateNode(ReasoningNode):
             payload=payload,
         )
 
+    @staticmethod
+    def _grounds(verdict: CriticVerdict) -> bool:
+        """Whether a rejection rests on one of the three reasons the prompt allows.
+
+        The critic may overturn a conclusion because nothing collected supports it, because
+        something collected contradicts it, or because it can name an explanation that fits the
+        same facts better. Those are the three, and the schema makes each of them a field, so the
+        verdict can be checked against its own grounds rather than taken on the model's word.
+
+        **A 3B needs that check.** Prompt v2 halved the rejections and the ones left over were a
+        model voting against a conclusion while filling in "supported by [0, 1, 5], contradicted
+        by nothing" directly above the vote — a correct deadlock diagnosis, thrown out twice, on
+        the grounds that the evidence did not *prove* it. A veto nobody can point at is an
+        opinion, and this system already has a place for a model's opinion about how strong the
+        evidence is: it is a quarter of the confidence score, and the 0.70 threshold is the other
+        gate. Making the veto need a reason does not disarm the critic — it moves an unarguable
+        objection from "end the round" to "lower the number", where it can still stop the run.
+        """
+        return (
+            not verdict.supporting_evidence
+            or bool(verdict.contradicting_evidence)
+            or bool(verdict.alternative)
+        )
+
     def _rejected(
         self,
         ctx: InvestigationContext,
@@ -140,7 +211,7 @@ class ValidateNode(ReasoningNode):
         """Send the run back for another explanation, or stop if it has been back already."""
         failures = ctx.bump(FAILURE_COUNTER)
         objections = self._objections(verdict)
-        ctx.critic_feedback.extend(objections)
+        ctx.critic_feedback.append(self._feedback_line(root_cause.title, objections))
 
         if failures > MAX_REJECTIONS:
             # Second rejection. The conclusion is kept this time, with its score, because a human
@@ -232,9 +303,38 @@ class ValidateNode(ReasoningNode):
         )
 
     @staticmethod
+    def _feedback_line(title: str, objections: list[str]) -> str:
+        """One rejection as one line: what was rejected, and why.
+
+        The hypotheses prompt introduces this list as "rejected in an earlier round — do not
+        propose these again", and until now it was handed the *objections* instead: lines like
+        "the connection count is for the whole estate". A small model reads those as the things
+        not to propose and walks away from the very explanation the objection was about, which is
+        what the second round of a real run looked like — a correct database diagnosis in round
+        one, and failed traces in round two. Naming the conclusion makes the list say what the
+        heading promises.
+        """
+        reasons = "; ".join(objections) or "no reason given"
+
+        return f'"{title}" was rejected: {reasons}'
+
+    @staticmethod
     def _objections(verdict: CriticVerdict) -> list[str]:
-        """The critic's reasons, as lines the next round of hypotheses will be shown."""
-        objections = [*verdict.concerns, *verdict.unsupported_claims]
+        """The critic's reasons, as lines the next round of hypotheses will be shown.
+
+        The contradicting indices lead, because they are the specific thing the next round has to
+        account for: "evidence [3] contradicts this" points at a fact, where "the evidence is
+        insufficient" points at nothing and produces the same hypothesis again with softer
+        wording.
+        """
+        objections: list[str] = []
+
+        if verdict.contradicting_evidence:
+            cited = ", ".join(f"[{index}]" for index in verdict.contradicting_evidence)
+            objections.append(f"evidence {cited} contradicts this explanation")
+
+        objections.extend(verdict.concerns)
+        objections.extend(verdict.unsupported_claims)
 
         if verdict.alternative:
             objections.append(f"a better explanation may be: {verdict.alternative}")

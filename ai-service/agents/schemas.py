@@ -151,28 +151,48 @@ class CriticVerdict(BaseModel):
 
     ``valid=False`` is a first-class answer and the prompt says so. A critic that agrees with
     everything is a step in the timeline that costs a second and means nothing.
+
+    **The field order is the reasoning order, and that is the point of it.** Constrained decoding
+    generates the keys in the order this class declares them, so a model that must fill
+    ``supporting_evidence`` and ``contradicting_evidence`` first has to look at the evidence
+    before it reaches ``valid`` — and then the verdict has something to follow from. With
+    ``valid`` first (prompt v1) the 3B decided and justified afterwards, and threw out a
+    conclusion that was already correct in six of its ten rejections.
     """
 
-    valid: bool = Field(
-        description="Whether the cited evidence supports the stated cause. False is expected.",
+    supporting_evidence: list[int] = Field(
+        description="Indices of the collected facts that back the stated cause.",
     )
 
-    confidence: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="How strongly the evidence supports it, independent of whether it is valid.",
+    contradicting_evidence: list[int] = Field(
+        description=(
+            "Indices of facts inconsistent with it. Not facts that merely fail to mention it."
+        ),
+    )
+
+    unsupported_claims: list[str] = Field(
+        description="Statements in the explanation that no evidence backs.",
     )
 
     concerns: list[str] = Field(
         description="What weakens the conclusion, one short line each. Empty only if nothing does.",
     )
 
-    unsupported_claims: list[str] = Field(
-        description="Statements in the explanation that no cited evidence backs.",
-    )
-
     alternative: str | None = Field(
         description="A better explanation of the same evidence, when there is one. Else null.",
+    )
+
+    valid: bool = Field(
+        description=(
+            "Whether the evidence supports the stated cause. False when nothing supports it, "
+            "something contradicts it, or the alternative explains it better."
+        ),
+    )
+
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="How strongly the evidence supports it, independent of whether it is valid.",
     )
 
 

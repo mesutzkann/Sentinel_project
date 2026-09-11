@@ -226,20 +226,42 @@ def evidence_support(evidence: Sequence[EvidenceItem], cited: Iterable[int]) -> 
 
 
 def hypothesis_margin(hypotheses: Sequence[Hypothesis]) -> float | None:
-    """The gap between the best hypothesis and the next one, or ``None`` when there is no next.
+    """The gap between the winner and the best hypothesis that is a *different* claim.
 
     A single hypothesis has no margin, and it is tempting to call that 1.0 — nothing competed, so
     nothing disagreed. It is the opposite: a run that produced one explanation never considered an
     alternative, and this term exists to measure that the winner beat one. So it is unavailable
     and the score is renormalised without it, which says "not measured" rather than "perfect" or
     "zero".
-    """
-    scores = sorted((h.score for h in hypotheses), reverse=True)
 
-    if len(scores) < 2:
+    **A paraphrase is not an alternative, and measuring against one punished the agent for
+    repeating itself.** On the pool-exhaustion scenario the 3B proposed "the database connection
+    pool is exhausted" at 0.797 and "the connection pool is being used beyond its capacity" at
+    0.745 — one claim, written twice, citing the same two facts. The gap between them was 0.05,
+    and a correct conclusion the critic had just accepted at 0.95 scored 0.667 and stopped for a
+    human. With the runner-up taken as the best hypothesis resting on a *different* set of facts,
+    the same run scores above the threshold and finishes.
+
+    Sameness is judged by the cited evidence, because that is what this module can see. Two
+    hypotheses citing exactly the same facts are the same claim as far as any arithmetic over
+    evidence is concerned, whatever they say in prose. It is a deliberately crude test: a
+    hypothesis citing a subset of another's facts counts as different, and telling those apart
+    would need the meaning of the sentences, which is the one thing not to put in here.
+    """
+    ranked = sorted(hypotheses, key=lambda h: h.score, reverse=True)
+
+    if not ranked:
         return None
 
-    return _clamped(scores[0] - scores[1])
+    winner, cited = ranked[0], frozenset(ranked[0].supporting_evidence)
+
+    for other in ranked[1:]:
+        if frozenset(other.supporting_evidence) != cited:
+            return _clamped(winner.score - other.score)
+
+    # Every other hypothesis rests on exactly the same facts, so nothing here competed with the
+    # winner — the same case as having produced one hypothesis, and reported the same way.
+    return None
 
 
 def _clamp(value: float | None) -> float | None:

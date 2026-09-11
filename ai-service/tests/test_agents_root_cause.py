@@ -59,11 +59,13 @@ def _statement(**overrides: object) -> str:
 
 def _verdict(**overrides: object) -> str:
     payload: dict[str, object] = {
+        "supporting_evidence": [0, 1],
+        "contradicting_evidence": [],
+        "unsupported_claims": [],
+        "concerns": [],
+        "alternative": None,
         "valid": True,
         "confidence": 0.9,
-        "concerns": [],
-        "unsupported_claims": [],
-        "alternative": None,
     }
 
     return json.dumps({**payload, **overrides})
@@ -240,6 +242,57 @@ async def test_a_rejected_conclusion_goes_back_once_carrying_the_objections() ->
     assert any("a better explanation" in line for line in ctx.critic_feedback)
 
 
+async def test_a_contradiction_leads_the_feedback_with_the_fact_that_caused_it() -> None:
+    """"Evidence [3] says otherwise" is something the next round can act on.
+
+    "The evidence is insufficient" is not, and produces the same hypothesis again in softer
+    words — which is what the two-round loop looked like before the critic was asked to name the
+    facts it was judging on.
+    """
+    ctx = _pool_context()
+    _ranked(ctx)
+    ctx.root_cause = RootCause(title=POOL_TITLE, explanation="deadlocks", supporting_evidence=[0])
+    verdict = _verdict(
+        valid=False,
+        confidence=0.2,
+        supporting_evidence=[],
+        contradicting_evidence=[2],
+        concerns=["the deadlock count is zero"],
+    )
+
+    await ValidateNode(ScriptedProvider([verdict])).run(ctx)
+
+    line = ctx.critic_feedback[0]
+    assert line.startswith(f'"{POOL_TITLE}" was rejected:'), (
+        "the hypotheses prompt reads this list as the explanations not to propose again, so "
+        "each line has to name one"
+    )
+    assert "evidence [2] contradicts this explanation" in line
+    assert "the deadlock count is zero" in line
+
+
+async def test_the_critic_reads_the_evidence_before_it_reaches_a_verdict() -> None:
+    """The prompt asks for the two index lists first, and they are kept for a human to check."""
+    ctx = _pool_context()
+    _ranked(ctx)
+    ctx.root_cause = RootCause(title=POOL_TITLE, explanation="the pool", supporting_evidence=[0])
+
+    await ValidateNode(ScriptedProvider([_verdict(supporting_evidence=[0, 1])])).run(ctx)
+
+    assert ctx.root_cause is not None
+    assert ctx.root_cause.validator_output is not None
+    assert ctx.root_cause.validator_output["supporting_evidence"] == [0, 1]
+    assert ctx.root_cause.validator_output["contradicting_evidence"] == []
+
+
+async def test_the_critic_is_on_v2_and_v1_is_still_reachable() -> None:
+    """v1 is what the published 3B and 7B numbers were measured against, so it stays loadable."""
+    provider = ScriptedProvider([])
+
+    assert ValidateNode(provider).prompt_id == "critic.v2"
+    assert ValidateNode(provider, prompt_version="v1").prompt_id == "critic.v1"
+
+
 async def test_a_second_rejection_stops_and_keeps_what_it_had() -> None:
     ctx = _pool_context()
     _ranked(ctx)
@@ -249,7 +302,14 @@ async def test_a_second_rejection_stops_and_keeps_what_it_had() -> None:
     ctx.counters["validate_failures"] = 1
 
     transition = await ValidateNode(
-        ScriptedProvider([_verdict(valid=False, confidence=0.2, concerns=["still no"])])
+        ScriptedProvider([
+            _verdict(
+                valid=False,
+                confidence=0.2,
+                contradicting_evidence=[2],
+                concerns=["still no"],
+            )
+        ])
     ).run(ctx)
 
     assert transition.next_state is State.NEEDS_HUMAN
@@ -257,6 +317,65 @@ async def test_a_second_rejection_stops_and_keeps_what_it_had() -> None:
     assert [event.type for event in transition.events] == [EventType.ROOT_CAUSE]
     assert transition.events[0].payload is not None
     assert transition.events[0].payload["accepted_by_critic"] is False
+
+
+async def test_a_veto_with_no_grounds_is_overruled_and_only_lowers_the_score() -> None:
+    """The critic may reject for three reasons, and this verdict names none of them.
+
+    It is the shape a 3B produces after prompt v2: supported by these facts, contradicted by
+    nothing, no better explanation offered — and invalid anyway, because the evidence did not
+    *prove* it. The objection survives as a concern and as a low validator confidence; what it
+    no longer does is end the round.
+    """
+    ctx = _pool_context()
+    _ranked(ctx)
+    ctx.root_cause = RootCause(
+        title=POOL_TITLE, explanation="the pool was lowered", supporting_evidence=[0, 1]
+    )
+    verdict = _verdict(
+        valid=False,
+        confidence=0.55,
+        supporting_evidence=[0, 1],
+        contradicting_evidence=[],
+        alternative=None,
+        concerns=["the evidence does not prove the timeouts came from the pool"],
+    )
+
+    transition = await ValidateNode(ScriptedProvider([verdict])).run(ctx)
+
+    assert transition.next_state is not State.GENERATE_HYPOTHESES
+    assert ctx.root_cause is not None, "the conclusion is kept rather than discarded"
+    assert ctx.counters.get("validate_failures") is None, "it did not count as a rejection"
+    assert transition.payload is not None
+    assert transition.payload["verdict_overruled"] is True
+    assert any("without naming a reason" in note for note in ctx.notes)
+    # The critic still has a say: its 0.55 is a quarter of the score.
+    assert ctx.root_cause.validator_confidence == 0.55
+    assert ctx.root_cause.validator_output is not None
+    assert ctx.root_cause.validator_output["valid"] is False, "what it said is recorded verbatim"
+
+
+async def test_a_veto_that_names_a_contradiction_still_stands() -> None:
+    ctx = _pool_context()
+    _ranked(ctx)
+    ctx.root_cause = RootCause(title=POOL_TITLE, explanation="deadlocks", supporting_evidence=[0])
+    verdict = _verdict(valid=False, confidence=0.3, contradicting_evidence=[2])
+
+    transition = await ValidateNode(ScriptedProvider([verdict])).run(ctx)
+
+    assert transition.next_state is State.GENERATE_HYPOTHESES
+    assert ctx.root_cause is None
+
+
+async def test_a_veto_that_rests_on_nothing_supporting_still_stands() -> None:
+    ctx = _pool_context()
+    _ranked(ctx)
+    ctx.root_cause = RootCause(title=POOL_TITLE, explanation="a guess", supporting_evidence=[])
+    verdict = _verdict(valid=False, confidence=0.1, supporting_evidence=[])
+
+    transition = await ValidateNode(ScriptedProvider([verdict])).run(ctx)
+
+    assert transition.next_state is State.GENERATE_HYPOTHESES
 
 
 async def test_nothing_to_validate_stops_for_a_human() -> None:

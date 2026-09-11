@@ -199,14 +199,45 @@ def test_a_single_hypothesis_has_no_margin() -> None:
     assert hypothesis_margin([Hypothesis(title="only one", score=0.9)]) is None
 
 
-def test_the_margin_is_the_gap_between_the_first_two() -> None:
+def test_the_margin_is_the_gap_to_the_best_competing_explanation() -> None:
     hypotheses = [
-        Hypothesis(title="second", score=0.4),
-        Hypothesis(title="first", score=0.75),
-        Hypothesis(title="third", score=0.1),
+        Hypothesis(title="second", score=0.4, supporting_evidence=[2]),
+        Hypothesis(title="first", score=0.75, supporting_evidence=[0, 1]),
+        Hypothesis(title="third", score=0.1, supporting_evidence=[3]),
     ]
 
     assert hypothesis_margin(hypotheses) == pytest.approx(0.35)
+
+
+def test_a_paraphrase_of_the_winner_is_not_an_alternative() -> None:
+    """The measurement that kept correct conclusions away from the threshold.
+
+    The 3B proposed the pool exhaustion twice in different words, both citing the same two facts.
+    The gap between them was 0.05, and a conclusion the critic had accepted at 0.95 scored 0.667
+    and stopped for a human. The runner-up here is the hypothesis that rests on something else.
+    """
+    hypotheses = [
+        Hypothesis(title="the pool is exhausted", score=0.80, supporting_evidence=[0, 1]),
+        Hypothesis(title="the pool is beyond capacity", score=0.75, supporting_evidence=[1, 0]),
+        Hypothesis(title="a deploy changed the pool size", score=0.52, supporting_evidence=[4]),
+    ]
+
+    assert hypothesis_margin(hypotheses) == pytest.approx(0.28)
+
+
+def test_hypotheses_that_all_cite_the_same_facts_measure_no_margin() -> None:
+    """Including when they cite nothing: nothing here competed with the winner."""
+    same = [
+        Hypothesis(title="one way of saying it", score=0.8, supporting_evidence=[0]),
+        Hypothesis(title="another way", score=0.7, supporting_evidence=[0]),
+    ]
+    neither = [
+        Hypothesis(title="a guess", score=0.4),
+        Hypothesis(title="another guess", score=0.3),
+    ]
+
+    assert hypothesis_margin(same) is None
+    assert hypothesis_margin(neither) is None
 
 
 def test_no_hypotheses_has_no_margin() -> None:

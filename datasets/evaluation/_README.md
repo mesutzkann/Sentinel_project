@@ -100,3 +100,10 @@ that all point one way measures nothing about a model's ability to weigh them.
 `weight` follows the collectors' three values: 0.8 looked and found something, 0.4 looked and
 found nothing, 0.6 a gauge, with 0.9 for a saturation the server itself measured and 0.5 for a
 retrieved document.
+
+**Where the numbers stand.** On `qwen2.5:3b-instruct` these five cases produce three correct root
+causes, two finished investigations, and six recommendations, at 4.0 model calls per run. The
+first two of those were 3, 0 and 0 until the critic was rebuilt; what changed and what it cost is
+[ADR-0007](../../docs/adr/0007-critic-veto-needs-grounds.md). Two runs of the same set are
+identical — temperature is 0 and decoding is constrained — so a difference in this table is a
+change in the system rather than in the sampler.

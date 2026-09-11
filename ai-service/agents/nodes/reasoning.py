@@ -116,16 +116,21 @@ class ReasoningNode(Node):
     #: Phase 11 can run two prompt versions against the same scenarios.
     prompt_name: str = ""
 
+    #: Which version a caller gets when it does not pin one. Per node rather than one number for
+    #: the build, because prompts are improved one at a time: the critic is on v2 because v1 was
+    #: measured and rejected correct conclusions, and that says nothing about the other four.
+    default_prompt_version: str = "v1"
+
     def __init__(
         self,
         provider: LocalLlmProvider,
         *,
-        prompt_version: str = "v1",
+        prompt_version: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         prompts: PromptRegistry | None = None,
     ) -> None:
         self._provider = provider
-        self._prompt_version = prompt_version
+        self._prompt_version = prompt_version or self.default_prompt_version
         self._max_attempts = max_attempts
         self._prompts = prompts or registry()
 

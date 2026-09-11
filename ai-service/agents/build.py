@@ -63,15 +63,17 @@ def build_nodes(
     mcp_client: McpClient,
     retriever: Retriever,
     router: Router,
-    prompt_version: str = "v1",
+    prompt_version: str | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
 ) -> dict[State, Node]:
     """One node per non-terminal state.
 
-    ``prompt_version`` reaches every reasoning node at once, because Phase 11 compares prompt
-    versions across whole runs: a build where one node was on v2 and the rest on v1 would produce
-    a number that belongs to neither version.
+    ``prompt_version`` pins *every* reasoning node to one version, which is what Phase 11 wants
+    when it compares whole runs: a build where one node was pinned and the rest were not would
+    produce a number that belongs to neither version. Left as ``None`` — the normal case — each
+    node uses its own current default, and those move independently because prompts are improved
+    one at a time.
     """
     reasoning = {"prompt_version": prompt_version, "max_attempts": max_attempts}
 
@@ -123,7 +125,7 @@ def build_machine(
     retriever: Retriever,
     router: Router,
     emit: Emitter | None = None,
-    prompt_version: str = "v1",
+    prompt_version: str | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
     max_transitions: int = DEFAULT_MAX_TRANSITIONS,

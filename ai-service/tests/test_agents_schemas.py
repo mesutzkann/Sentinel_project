@@ -45,6 +45,22 @@ def test_no_field_is_optional(schema: type[BaseModel]) -> None:
     assert not optional, f"{schema.__name__} lets the model omit {sorted(optional)}"
 
 
+def test_the_critic_commits_to_the_evidence_before_the_verdict() -> None:
+    """Field order is generation order under constrained decoding, so it is part of the contract.
+
+    With `valid` first the model decided and then justified, and it rejected conclusions that
+    were already correct. Both index lists have to come before it for the verdict to follow from
+    anything.
+    """
+    order = list(CriticVerdict.model_json_schema()["properties"])
+
+    assert order.index("supporting_evidence") < order.index("valid")
+    assert order.index("contradicting_evidence") < order.index("valid")
+    assert order.index("alternative") < order.index("valid"), (
+        "the alternative is one of the three reasons to reject, so it is named before the verdict"
+    )
+
+
 def test_the_nullable_fields_are_still_nullable() -> None:
     hypothesis = ProposedHypothesis(
         title="something",
