@@ -101,9 +101,20 @@ that all point one way measures nothing about a model's ability to weigh them.
 found nothing, 0.6 a gauge, with 0.9 for a saturation the server itself measured and 0.5 for a
 retrieved document.
 
-**Where the numbers stand.** On `qwen2.5:3b-instruct` these five cases produce three correct root
-causes, two finished investigations, and six recommendations, at 4.0 model calls per run. The
-first two of those were 3, 0 and 0 until the critic was rebuilt; what changed and what it cost is
-[ADR-0007](../../docs/adr/0007-critic-veto-needs-grounds.md). Two runs of the same set are
-identical — temperature is 0 and decoding is constrained — so a difference in this table is a
-change in the system rather than in the sampler.
+**Where the numbers stand** (2026-09-11, after the critic rebuild):
+
+| model | correct root cause | finished | reached it | calls | mean |
+|---|---|---|---|---|---|
+| `qwen2.5:3b-instruct` | 3/5 | 2/5 | 3/5 | 4.0 | 74 s |
+| `qwen2.5:7b-instruct` | 4/5 | 4/5 | 5/5 | 4.4 | 90 s |
+
+The 3B's first two columns were 3 and 0 until the critic was rebuilt; what changed and what it
+cost is [ADR-0007](../../docs/adr/0007-critic-veto-needs-grounds.md). The 7B writes the correct
+conclusion in all five and loses one of them at the confidence threshold — R04, the n+1 query,
+which neither model gets.
+
+Two runs of the same set on the 3B are identical — temperature is 0 and decoding is constrained —
+so a difference in this table is a change in the system rather than in the sampler. The 7B
+repeated its five conclusions and its five confidences exactly with an embedding model loaded
+first, at 140 s rather than 90 s: on 6 GB of VRAM Ollama evicts bge-m3 and keeps 82% of the 7B on
+the GPU either way.

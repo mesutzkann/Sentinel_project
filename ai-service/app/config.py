@@ -33,18 +33,25 @@ class Settings(BaseSettings):
     # ---- LLM ----
     ollama_base_url: str = "http://localhost:11434"
 
-    # The 3B is the default everywhere, including the demo, and that is now measured rather than
-    # assumed. `python -m evaluation.reasoning_eval` over the five implemented chaos scenarios,
-    # on the machine this is developed on (RTX 3060 Laptop, 6 GB):
+    # The 3B is the default, and as of 2026-09-11 that is the more conservative choice rather
+    # than the measured one. `python -m evaluation.reasoning_eval` over the five implemented
+    # chaos scenarios, on the machine this is developed on (RTX 3060 Laptop, 6 GB), after the
+    # critic was rebuilt (docs/adr/0007):
     #
-    #   3B: 3 of 5 root causes correct, 97 s and 6 model calls per investigation
-    #   7B: 5.1 GB of weights against 6 GB of VRAM, so Ollama runs it 18% on the CPU. Three of
-    #       the five runs exceeded a 900 s per-call timeout; the two that finished took 260 s
-    #       and 226 s and reached no better conclusion.
+    #   3B: 3 of 5 root causes correct, 2 of 5 investigations finished, 4.0 calls,  74 s
+    #   7B: 4 of 5 root causes correct, 4 of 5 investigations finished, 4.4 calls,  90 s
     #
-    # An investigation nobody can sit through is not a demo, so the earlier plan — 3B to develop
-    # against, 7B for demos — is dropped. A 7B needs a card that fits it, and that is a hardware
-    # decision rather than a configuration one.
+    # The 7B still does not fit: 5.12 GB of weights against 6 GB of VRAM, so Ollama places 82%
+    # of it on the GPU and runs the rest on the CPU. What changed is that this is no longer
+    # fatal. The September benchmark recorded three of five runs blowing a 900 s per-call
+    # timeout; nothing here reproduces that — twice, including a run with bge-m3 loaded first,
+    # where Ollama evicted the embedding model and the investigations took 140 s rather than 90.
+    # The old figure was measured with the 3B run immediately before it in the same invocation
+    # and before the schema and critic work cut a run from 6 model calls to 4.4; which of those
+    # explains it has not been established.
+    #
+    # Switching the default is the project owner's call and has not been made. What is measured
+    # is that a 7B investigation is a thing a person can sit through on this hardware.
     llm_model: str = "qwen2.5:3b-instruct"
 
     llm_timeout_seconds: float = 120.0
