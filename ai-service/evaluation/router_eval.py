@@ -272,6 +272,15 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split", default="test", choices=("train", "val", "test"))
     parser.add_argument("--models", default="", help="comma-separated Ollama model names")
     parser.add_argument(
+        "--prompt",
+        default="v1",
+        help=(
+            "which router prompt the models in this run are given. v1 carries the fifteen "
+            "intents and their tools, which a base model has to be told; v2 is one line, which "
+            "is what a tuned model is trained on and all it needs"
+        ),
+    )
+    parser.add_argument(
         "--unconstrained",
         action="store_true",
         help=(
@@ -317,11 +326,20 @@ async def main(argv: list[str] | None = None) -> int:
 
             return 1
 
-        routers.append((ModelRouter(provider, name=model), True))
+        label = f"{model} [{args.prompt}]"
+        routers.append((ModelRouter(provider, name=label, prompt_version=args.prompt), True))
 
         if args.unconstrained:
             routers.append(
-                (ModelRouter(provider, name=f"{model} (no grammar)", constrained=False), True)
+                (
+                    ModelRouter(
+                        provider,
+                        name=f"{label} no grammar",
+                        prompt_version=args.prompt,
+                        constrained=False,
+                    ),
+                    True,
+                )
             )
 
     print(f"{len(examples)} questions from {args.split}, {len(routers)} routers", file=sys.stderr)

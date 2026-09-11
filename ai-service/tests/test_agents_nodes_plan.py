@@ -114,6 +114,7 @@ async def test_the_step_payload_says_what_was_planned_and_what_was_skipped() -> 
                 intent=Intent.FULL_INVESTIGATION,
                 requires_rag=False,
                 requires_mcp=True,
+                tools=[],
                 target_service="orders",
             )
         )
@@ -134,7 +135,11 @@ async def test_an_empty_plan_goes_straight_to_reasoning_and_says_so() -> None:
     node = PlanNode(
         _FixedRouter(
             RouteDecision(
-                intent=Intent.KNOWLEDGE_QUESTION, requires_rag=False, requires_mcp=False
+                intent=Intent.KNOWLEDGE_QUESTION,
+                requires_rag=False,
+                requires_mcp=False,
+                tools=[],
+                target_service=None,
             )
         )
     )

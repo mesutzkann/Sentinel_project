@@ -23,15 +23,24 @@ def test_shipped_prompts_load() -> None:
     assert "incident_summary.v1" in ids
 
 
+# The one prompt that asks for JSON and deliberately does not show the schema. `router.v2` is
+# the fine-tuned router's prompt: the model was trained on this exact one line, it has the shape
+# and the fifteen intents in its weights, and constrained decoding enforces the object anyway.
+# Carrying 1.5 kB of schema it does not read is what `router.v1` does for the *base* model, and
+# it costs about a second a question.
+_SCHEMA_EXEMPT = frozenset({"router.v2"})
+
+
 def test_a_prompt_that_asks_for_json_shows_the_schema() -> None:
     """A structured-output prompt without the schema in it tells the model nothing about shape.
 
     Scoped to the prompts that ask for JSON rather than to all of them: `hyde_passage` asks for
     three sentences of prose, and requiring a schema placeholder in it would be requiring the
-    wrong thing of the right prompt.
+    wrong thing of the right prompt. The exemption above is deliberate and is one prompt long —
+    a second entry in that set should have to argue for itself.
     """
     for prompt in registry().all():
-        if "JSON" not in prompt.template:
+        if "JSON" not in prompt.template or prompt.id in _SCHEMA_EXEMPT:
             continue
 
         assert "schema" in prompt.variables, f"{prompt.id} asks for JSON without a schema"

@@ -75,6 +75,7 @@ def test_the_route_service_beats_the_incident_hint() -> None:
             intent=Intent.LOG_QUERY,
             requires_rag=False,
             requires_mcp=True,
+            tools=[],
             target_service="payments",
         ),
     )
@@ -85,7 +86,13 @@ def test_the_route_service_beats_the_incident_hint() -> None:
 def test_the_hint_survives_a_route_that_named_nobody() -> None:
     ctx = _context(
         service_hint="gateway",
-        route=RouteDecision(intent=Intent.GENERAL_QUESTION, requires_rag=True, requires_mcp=True),
+        route=RouteDecision(
+            intent=Intent.GENERAL_QUESTION,
+            requires_rag=True,
+            requires_mcp=True,
+            tools=[],
+            target_service=None,
+        ),
     )
 
     assert ctx.target_service == "gateway"

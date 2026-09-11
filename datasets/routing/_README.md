@@ -54,11 +54,20 @@ it.
 `python -m evaluation.router_eval --split test --models qwen2.5:1.5b-instruct --unconstrained`,
 on an RTX 3060 Laptop:
 
-| router | intent | service | tool F1 | invalid JSON | p50 |
-|---|---|---|---|---|---|
-| rule table | **0.449** | 0.969 | 0.515 | 0% | 0 ms |
-| `qwen2.5:1.5b-instruct`, schema enforced | 0.316 | 0.582 | 0.335 | 0% | 1029 ms |
-| the same, no grammar | 0.000 | 0.071 | 0.000 | **100%** | 8978 ms |
+| router | prompt | intent | service | tool F1 | invalid JSON | p50 |
+|---|---|---|---|---|---|---|
+| rule table | — | 0.449 | 0.969 | 0.515 | 0% | 0 ms |
+| `qwen2.5:1.5b-instruct` | v1 | 0.316 | 0.582 | 0.335 | 0% | 1029 ms |
+| the same, no grammar | v1 | 0.000 | 0.071 | 0.000 | **100%** | 8978 ms |
+| **`sentinel-router`, QLoRA on this set** | v2 | **0.693** | 0.960 | 0.536 | 3.6% | 2482 ms |
+
+The tuned model is 54% better than the keyword table at the thing the phase is judged on, and
+more than twice the base it was trained from. It is not yet the 0.95 the roadmap asks for. Where
+it still loses is specific and measured rather than mysterious: `mixed` at 0.11 against `en` at
+0.90, `PERFORMANCE_ANALYSIS` at 0.13 and `TRACE_QUERY` at 0.22, the second confused with
+`LOG_QUERY` twelve times. Mixed-language rows are 6% of the training set and the two weak intents
+are the two whose phrasings overlap most; both are data problems with a known lever, which is the
+paraphrase augmentation this build does not yet include.
 
 Three things a tuned model has to answer for:
 
@@ -68,7 +77,7 @@ Three things a tuned model has to answer for:
 - **Without the grammar the base model cannot produce the schema at all.** That is the number
   fine-tuning is supposed to move, and constrained decoding hides it — which is why the benchmark
   reports both and the shipped path keeps the grammar on.
-- **1029 ms against a 150 ms target.** The prompt carries the fifteen intents and their tool
-  lists, which a tuned model would not need. A shorter prompt for the tuned router is the obvious
-  lever and it changes the training input, so it is a decision to take before training rather
-  than after.
+- **Latency is not solved by the shorter prompt.** `router.v2` is one line and the tuned model
+  still measures 2482 ms against a 150 ms target — slower than the base model on the long prompt.
+  The f16 GGUF is 3.55 GB because the merge has to untie Qwen's embedding, which is most of a
+  6 GB card; a Q8_0 build is the next thing to measure.

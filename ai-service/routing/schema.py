@@ -82,6 +82,14 @@ class RouteDecision(BaseModel):
     hallucinates a tool name gets a refusal rather than an execution. That is deliberate: the
     Phase 8 model is 1.5B, and the cheapest way to make its mistakes harmless is to give its
     output no authority it does not need.
+
+    **No field has a default, and that is the same lesson as `agents/schemas.py`.** This class is
+    the grammar constrained decoding generates against, and a field with a default is absent from
+    the schema's ``required`` list — so the grammar *permits* the model to skip the key, and a
+    small model does. Measured here: with defaults on ``tools`` and ``target_service``, the tuned
+    1.5B answered "payments loglarını göster" with no ``target_service`` at all, which is the
+    half of the answer that decides which service gets collected from. ``target_service`` is
+    still nullable; "no single service" now has to be *said* rather than left out.
     """
 
     model_config = {"frozen": True}
@@ -97,11 +105,9 @@ class RouteDecision(BaseModel):
     )
 
     tools: list[str] = Field(
-        default_factory=list,
         description="Qualified tool names the question suggests, e.g. logs-mcp/get_recent_errors.",
     )
 
     target_service: str | None = Field(
-        default=None,
         description="The service the question is about, when it names or implies exactly one.",
     )
