@@ -9,6 +9,7 @@ import { IncidentsPage } from '../features/incidents/IncidentsPage';
 import { InvestigationPage } from '../features/investigations/InvestigationPage';
 import { InvestigationsPage } from '../features/investigations/InvestigationsPage';
 import { McpToolsPage } from '../features/mcp/McpToolsPage';
+import { ModelsPage } from '../features/models/ModelsPage';
 import { ServicesPage } from '../features/services/ServicesPage';
 
 const queryClient = new QueryClient({
@@ -82,6 +83,7 @@ function AuthGate() {
         <Route path="investigations/:id" element={<InvestigationPage />} />
         <Route path="services" element={<ServicesPage />} />
         <Route path="mcp" element={<McpToolsPage />} />
+        <Route path="models" element={<ModelsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

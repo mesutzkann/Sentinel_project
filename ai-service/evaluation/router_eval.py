@@ -41,6 +41,7 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -255,8 +256,25 @@ def report(scores: list[Scores]) -> str:
     return "\n".join(lines)
 
 
-def as_json(scores: list[Scores], outcomes: dict[str, list[Outcome]]) -> dict[str, Any]:
+def as_json(
+    scores: list[Scores],
+    outcomes: dict[str, list[Outcome]],
+    *,
+    split: str,
+    prompt: str,
+) -> dict[str, Any]:
+    """The run, with enough about itself to be read months later.
+
+    The metadata is not decoration. `/models` in the AI service publishes this file to the
+    frontend, and a table of accuracies with no split, no prompt version and no date is a table
+    nobody can check — the same numbers mean different things on `val` and on `test`, and the
+    split itself has changed once already this phase.
+    """
     return {
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "split": split,
+        "prompt": prompt,
+        "examples": scores[0].examples if scores else 0,
         "scores": [row.__dict__ for row in scores],
         "outcomes": {
             name: [outcome.__dict__ for outcome in rows] for name, rows in outcomes.items()
@@ -356,7 +374,12 @@ async def main(argv: list[str] | None = None) -> int:
 
     if args.output:
         args.output.write_text(
-            json.dumps(as_json(scores, outcomes), indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(
+                as_json(scores, outcomes, split=args.split, prompt=args.prompt),
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8"
         )
         print(f"\nWrote {args.output}", file=sys.stderr)
 

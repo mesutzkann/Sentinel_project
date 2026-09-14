@@ -64,14 +64,27 @@ it.
 
 ## Where the baselines stand
 
-`python -m evaluation.router_eval --split test --models sentinel-router --prompt v2`, on an
-RTX 3060 Laptop, 333 questions:
+`python -m evaluation.router_eval --split test --models sentinel-router --prompt v2 --output
+datasets/routing/benchmark.json`, on an RTX 3060 Laptop, 333 questions. That file is the one the
+AI service publishes at `GET /models` and the frontend's Models page draws:
 
 | router | prompt | intent | service | tool F1 | invalid JSON | p50 |
 |---|---|---|---|---|---|---|
 | rule table | — | 0.354 | 0.976 | 0.410 | 0% | 0 ms |
 | `qwen2.5:1.5b-instruct` | v1 | 0.162 | 0.453 | 0.150 | 0% | 1213 ms |
-| **`sentinel-router`, QLoRA on this set** | v2 | **0.871** | 0.964 | 0.726 | 0% | 1241 ms |
+| **`sentinel-router`, QLoRA on this set** | v2 | **0.871** | 0.970 | 0.731 | 0% | 2051 ms |
+
+Two things about those last two columns, both measured rather than assumed:
+
+* **The accuracies repeat and the decimals do not.** Three runs of the same weights at
+  temperature 0 gave 0.871 intent every time, with service accuracy between 0.964 and 0.970 and
+  tool F1 between 0.726 and 0.731 — llama.cpp is deterministic per call, not across a run.
+  Quote the intent figure; treat the third decimal of the rest as noise.
+* **p50 here is a sustained-load number.** The same model measures 996 ms over a 30-question
+  sample and 1241 ms on a cold card, against 2051 ms across the full 333 — an eleven-minute run
+  heats a laptop GPU to 88°C and its clocks fall with it. The agent routes *one* question per
+  investigation, so a second is what a user waits; the table reports the pessimistic figure
+  because that is what the benchmark measured.
 
 The tuned 1.5B is two and a half times the keyword table at the thing the phase is judged on, and
 eight intents of the fifteen are perfect. It is short of the roadmap's 0.95, and the shortfall is
@@ -133,5 +146,6 @@ Three things a tuned model has to answer for:
 - **Invalid JSON is 0% with the grammar on**, which is what ships. The base model produces the
   schema at all only because of that grammar — without it, it was 100% invalid — and that gap is
   what fine-tuning is for.
-- **Latency is halved and still wrong.** 1241 ms against a 150 ms target. The prompt is one line
-  and the weights are quantised; what is left is a smaller model or a different serving path.
+- **Latency is halved and still wrong.** A second a question against a 150 ms target. The prompt
+  is one line and the weights are quantised; what is left is a smaller model or a different
+  serving path.

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.api import investigations as investigations_api
 from app.api import llm as llm_api
 from app.api import mcp as mcp_api
+from app.api import models as models_api
 from app.api import rag as rag_api
 from app.config import settings
 from llm.prompts import registry
@@ -53,6 +54,7 @@ app.include_router(llm_api.router)
 app.include_router(mcp_api.router)
 app.include_router(rag_api.router)
 app.include_router(investigations_api.router)
+app.include_router(models_api.router)
 
 
 class Health(BaseModel):
