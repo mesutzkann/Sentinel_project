@@ -133,6 +133,19 @@ def rag_headline(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def agent_headline(report: dict[str, Any]) -> dict[str, Any]:
+    """The end-to-end numbers, including the one worth being afraid of."""
+    scores = report.get("scores") or {}
+
+    return {
+        "root_cause_accuracy": scores.get("root_cause_accuracy"),
+        "completed": scores.get("completed"),
+        "false_remediation_rate": scores.get("false_remediation_rate"),
+        "tool_coverage": scores.get("mean_tool_coverage"),
+        "mean_duration_s": scores.get("mean_duration_s"),
+    }
+
+
 def reasoning_headline(report: dict[str, Any]) -> dict[str, Any]:
     """Per model, because the whole point of that benchmark is the comparison."""
     models = report.get("models") or {}
@@ -157,7 +170,7 @@ def reasoning_headline(report: dict[str, Any]) -> dict[str, Any]:
 def benchmarks() -> list[Benchmark]:
     """Imported lazily: each evaluator pulls in what it measures, and a suite that imported
     every one of them at module load would need Postgres to print `--list`."""
-    from evaluation import rag_eval, reasoning_eval, router_eval
+    from evaluation import agent_eval, rag_eval, reasoning_eval, router_eval
 
     return [
         Benchmark(
@@ -175,6 +188,17 @@ def benchmarks() -> list[Benchmark]:
             argv=(),
             run=rag_eval.main,
             headline=rag_headline,
+        ),
+        Benchmark(
+            kind="agent",
+            summary="The whole system against a real fault: break it, ask, score the conclusion.",
+            requires=(
+                "Everything: sample services, the observability stack, the MCP servers, "
+                "PostgreSQL and Ollama."
+            ),
+            argv=(),
+            run=agent_eval.main,
+            headline=agent_headline,
         ),
         Benchmark(
             kind="reasoning",
@@ -328,6 +352,12 @@ def _headline_text(run: BenchmarkRun) -> str:
             f"{run.metrics.get('best_retriever')}: "
             f"R@5 {_pct(run.metrics.get('recall_at_5'))}, "
             f"R@3 {_pct(run.metrics.get('recall_at_3'))}"
+        )
+
+    if run.kind == "agent":
+        return (
+            f"root cause {_pct(run.metrics.get('root_cause_accuracy'))}, "
+            f"false remediation {_pct(run.metrics.get('false_remediation_rate'))}"
         )
 
     if run.kind == "reasoning":

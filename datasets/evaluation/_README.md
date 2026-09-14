@@ -118,3 +118,46 @@ so a difference in this table is a change in the system rather than in the sampl
 repeated its five conclusions and its five confidences exactly with an embedding model loaded
 first, at 140 s rather than 90 s: on 6 GB of VRAM Ollama evicts bge-m3 and keeps 82% of the 7B on
 the GPU either way.
+
+## `runs/*`
+
+What `python -m evaluation.suite` wrote: one directory per invocation, holding `suite.json` (the
+record the Evaluation page draws) and one file per benchmark with its full output. Committed
+rather than ignored, for the same reason `datasets/routing/benchmark.json` is — a fresh checkout
+should show real numbers, and a chart with nothing behind it teaches nobody what the system is
+worth.
+
+## The same fixtures, two different benchmarks
+
+`reasoning/*.json` is read by **two** evaluators, and the difference between them is the whole
+reason both exist.
+
+`reasoning_eval` replays the recorded evidence and varies only the model. Nothing else moves, so
+"3B or 7B" has an answer.
+
+`agent_eval` ignores the recorded evidence and uses the same files for their *questions*: it
+enables the scenario on the running service, drives load, and lets the collectors gather whatever
+they actually gather. Its numbers move when a tool changes, when Loki is slow, when the router
+plans different collectors. When the two disagree, that one is measuring the model and this one
+is measuring the system.
+
+### What breaking things for real taught, on the first runs
+
+**Enabling a scenario is not breaking something.** Driving 2366 requests at 24 concurrent left
+the pool busy rather than exhausted: every request succeeded, the telemetry showed a slow but
+healthy service, and the agent correctly investigated an incident that was not happening.
+`agent_eval` now checks the load against the baseline and records a case whose service kept
+serving as *not run*, with its numbers — scoring it as a wrong answer would measure nothing.
+
+**The load has to reach the path the fault lives on.** 6413 checkouts through the gateway at 150
+concurrent failed none, because the pool scenario makes `GET /orders` hold a connection. The load
+goes to the owning service's own endpoint now.
+
+**Not every fault fails requests.** The missing-index scenario served everything and served it at
+a fifth of the baseline rate — 18/s against 100/s, zero errors. A reproduction check that counted
+only failures called that "did not reproduce". Throughput collapse counts too.
+
+**Two of the five scenarios need load nobody drives yet.** `DB_DEADLOCK` wants concurrent writes
+to payments and `NULL_REFERENCE_EXCEPTION` wants one particular currency; a generic read against
+a list endpoint leaves both untouched. They are reported as scenarios that did not reproduce
+rather than as failures of the agent, and per-scenario load recipes are the fix.
