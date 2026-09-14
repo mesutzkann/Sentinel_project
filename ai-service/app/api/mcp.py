@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.config import Settings, settings
+from mcp_client.approval import approval_tokens
 from mcp_client.client import McpClient
 from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpServerConfig, McpToolRegistry
@@ -51,7 +52,7 @@ def get_policy(
     registry: Annotated[McpToolRegistry, Depends(get_registry)],
     config: Annotated[Settings, Depends(settings)],
 ) -> McpPolicy:
-    return McpPolicy(registry, ApprovalVerifier(config.approval_secret or None))
+    return McpPolicy(registry, ApprovalVerifier(tokens=approval_tokens(config)))
 
 
 def get_client(

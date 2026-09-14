@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from mcp_client.approval import ApprovalTokens
 from mcp_client.policy import ApprovalVerifier, Decision, McpPolicy
 from mcp_client.registry import Discovery, McpServerConfig, McpTool, McpToolRegistry
 
@@ -57,10 +58,37 @@ def test_destructive_tools_are_refused_with_a_wrong_token() -> None:
     assert outcome.decision is Decision.DENIED_INVALID_APPROVAL
 
 
-def test_destructive_tools_are_allowed_with_the_right_token() -> None:
-    policy = McpPolicy(_registry(DESTRUCTIVE), ApprovalVerifier("the-real-token"))
+def test_destructive_tools_are_allowed_with_an_approval_for_that_call() -> None:
+    tokens = ApprovalTokens("the-secret")
+    policy = McpPolicy(_registry(DESTRUCTIVE), ApprovalVerifier(tokens=tokens))
+    token = tokens.issue(
+        recommendation_id="rec-1",
+        tool="test-mcp/restart_container",
+        arguments={"name": "orders"},
+    )
 
-    assert policy.evaluate("test-mcp/restart_container", "the-real-token").allowed
+    outcome = policy.evaluate("test-mcp/restart_container", token, {"name": "orders"})
+
+    assert outcome.allowed
+    assert outcome.approval is not None
+    assert outcome.approval.grant.recommendation_id == "rec-1"
+
+
+def test_an_approval_does_not_carry_to_another_call() -> None:
+    """The whole reason the token names the action: approving one restart approves one restart."""
+    tokens = ApprovalTokens("the-secret")
+    policy = McpPolicy(_registry(DESTRUCTIVE), ApprovalVerifier(tokens=tokens))
+    token = tokens.issue(
+        recommendation_id="rec-1",
+        tool="test-mcp/restart_container",
+        arguments={"name": "orders"},
+    )
+
+    elsewhere = policy.evaluate("test-mcp/restart_container", token, {"name": "payments"})
+
+    assert not elsewhere.allowed
+    assert elsewhere.decision is Decision.DENIED_INVALID_APPROVAL
+    assert "different arguments" in elsewhere.reason
 
 
 def test_no_configured_verifier_means_no_destructive_call_can_be_approved() -> None:

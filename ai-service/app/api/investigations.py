@@ -44,6 +44,7 @@ from app.api.mcp import get_client, get_registry
 from app.api.rag import get_service as get_rag_service
 from app.config import Settings, settings
 from llm.ollama_provider import OllamaLlmProvider
+from mcp_client.approval import approval_tokens
 from mcp_client.client import McpClient
 from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpToolRegistry
@@ -292,7 +293,7 @@ class InvestigationService:
             # turn into a note rather than a failure.
             await registry.discover()
 
-        policy = McpPolicy(registry, ApprovalVerifier(self._config.approval_secret or None))
+        policy = McpPolicy(registry, ApprovalVerifier(tokens=approval_tokens(self._config)))
 
         return get_client(registry, policy, self._config)
 

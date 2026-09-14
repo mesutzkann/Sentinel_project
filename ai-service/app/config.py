@@ -168,9 +168,18 @@ class Settings(BaseSettings):
     # Origins allowed to call this service from a browser. The Vite dev server by default.
     cors_origins: str = "http://localhost:5173"
 
-    # Secret a destructive tool call must carry. Empty means no destructive call can be
-    # approved, which is the correct default and the only one Phase 4 needs.
+    # The key approval tokens are signed with. Since Phase 10 a token is not this secret: it is
+    # an HMAC over the recommendation, the tool and a hash of the arguments, with an expiry, so
+    # approving "restart the orders container" authorises that and nothing else. This value is
+    # what the backend signs with and what this service verifies against, so the two have to
+    # match. Empty means no destructive call can be approved at all, which is the correct
+    # default: an unset secret must not quietly become an open door.
     approval_secret: str = ""
+
+    # How long an approval stays usable. Minutes rather than hours because a derived token cannot
+    # be revoked before it expires, and because an approval describes the system somebody was
+    # looking at when they gave it.
+    approval_ttl_seconds: int = 600
 
     @property
     def rerank_device_or_auto(self) -> str | None:

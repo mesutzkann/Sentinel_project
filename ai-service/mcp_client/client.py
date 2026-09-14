@@ -64,7 +64,7 @@ class McpClient:
         no way to reach a server without passing through it.
         """
         arguments = arguments or {}
-        decision = self._policy.evaluate(qualified_name, approval_token)
+        decision = self._policy.evaluate(qualified_name, approval_token, arguments)
 
         if not decision.allowed:
             return self._refused(qualified_name, arguments, decision)
