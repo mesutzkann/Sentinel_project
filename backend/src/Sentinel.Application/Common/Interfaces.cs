@@ -94,7 +94,43 @@ public interface IAiServiceClient
     /// </remarks>
     /// <exception cref="AiServiceUnavailableException">The AI service refused or did not answer.</exception>
     Task StartInvestigationAsync(StartInvestigationRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs one approved action and waits for the verification.
+    /// </summary>
+    /// <remarks>
+    /// Unlike an investigation, this one blocks: the AI service executes the tool, waits out a
+    /// settle window and measures the symptom again before answering. That is half a minute of
+    /// HTTP call and it is the right shape — the alternative is a second round trip to ask "did
+    /// it work", which is a second place for the answer to be lost.
+    /// </remarks>
+    /// <exception cref="AiServiceUnavailableException">The AI service refused or did not answer.</exception>
+    Task<ExecuteActionResult> ExecuteActionAsync(
+        ExecuteActionRequest request,
+        CancellationToken cancellationToken = default);
 }
+
+/// <summary>The body of <c>POST /actions/{id}/execute</c>.</summary>
+public sealed record ExecuteActionRequest(
+    Guid RecommendationId,
+    string Tool,
+    string? ArgumentsJson,
+    string ApprovalToken,
+    string? Service,
+    Guid InvestigationId);
+
+/// <summary>What the AI service did, and whether the symptom went away.</summary>
+/// <param name="Confirmed">
+/// True only when the action ran <em>and</em> the measurement improved. `Executed` alone is not
+/// success: a restart that changed nothing ran perfectly.
+/// </param>
+public sealed record ExecuteActionResult(
+    bool Executed,
+    bool Confirmed,
+    string Verdict,
+    string Summary,
+    string? Error,
+    string RawJson);
 
 /// <summary>The body of <c>POST /investigations</c>, per docs/planning.md §3.1.</summary>
 public sealed record StartInvestigationRequest(
@@ -127,4 +163,36 @@ public interface ICallbackTokenService
     string Issue(Guid investigationId);
 
     bool Verify(Guid investigationId, string? token);
+}
+
+/// <summary>
+/// Mints the token a human's approval turns into.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Not a shared secret: the token names the action. A grant carries the recommendation, the
+/// qualified tool name, a hash of the arguments and an expiry, so an approval of "restart the
+/// orders container" authorises that call and no other — the AI service and the MCP server both
+/// check all four against the call being made.
+/// </para>
+/// <para>
+/// The format is defined by <c>ai-service/mcp_client/approval.py</c>, which is the executable
+/// specification; <c>ApprovalTokenServiceTests</c> pins this implementation to a token that
+/// Python produced.
+/// </para>
+/// </remarks>
+public interface IApprovalTokenService
+{
+    /// <summary>Whether a secret is configured at all. False means nothing is approvable.</summary>
+    bool IsConfigured { get; }
+
+    /// <param name="argumentsJson">The tool arguments as stored on the recommendation.</param>
+    /// <param name="expiresAt">Overridable for tests; production uses the default lifetime.</param>
+    /// <exception cref="InvalidOperationException">No approval secret is configured.</exception>
+    string Issue(
+        Guid recommendationId,
+        string tool,
+        string? argumentsJson,
+        string? approvedBy,
+        DateTimeOffset? expiresAt = null);
 }

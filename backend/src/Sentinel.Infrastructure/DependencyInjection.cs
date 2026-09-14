@@ -73,6 +73,11 @@ public static class DependencyInjection
 
         services.AddScoped<IAiServiceClient, AiServiceClient>();
         services.AddSingleton<ICallbackTokenService, CallbackTokenService>();
+
+        // Phase 10. Shares its secret with the AI service and the MCP servers: the three
+        // verify the same token, and a value set in one of them and not the others makes
+        // every approval fail at whichever layer disagrees.
+        services.AddSingleton<IApprovalTokenService, ApprovalTokenService>();
     }
 
     private static void AddJwtAuthentication(IServiceCollection services, IConfiguration configuration)

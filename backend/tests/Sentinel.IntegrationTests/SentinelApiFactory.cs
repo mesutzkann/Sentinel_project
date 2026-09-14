@@ -34,6 +34,9 @@ namespace Sentinel.IntegrationTests;
 public sealed class SentinelApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string InternalApiKey = "integration-test-internal-token";
+
+    /// <summary>What approvals are signed with here. Shared with the AI service in a real stack.</summary>
+    public const string ApprovalSecret = "integration-test-approval-secret";
     public const string AdminUsername = "admin";
     public const string AdminPassword = "Admin123!";
 
@@ -88,6 +91,10 @@ public sealed class SentinelApiFactory : WebApplicationFactory<Program>, IAsyncL
         Environment.SetEnvironmentVariable("Seed__AdminUsername", AdminUsername);
         Environment.SetEnvironmentVariable("Seed__AdminPassword", AdminPassword);
         Environment.SetEnvironmentVariable("Internal__ApiKey", InternalApiKey);
+
+        // Without it the approval endpoints refuse every call, which is the correct production
+        // default and would make every approval test assert the refusal instead of the flow.
+        Environment.SetEnvironmentVariable("Internal__ApprovalSecret", ApprovalSecret);
 
         // Empty disables the OTLP exporter. Left set, every test run would spend its time
         // retrying against a collector that is not part of the test.
@@ -236,6 +243,32 @@ public sealed class RecordingAiServiceClient : IAiServiceClient
         Requests.Add(request);
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>Every approved action this client was asked to run.</summary>
+    public ConcurrentBag<ExecuteActionRequest> Executions { get; } = [];
+
+    /// <summary>What to answer with. Defaults to an action that ran and measurably helped.</summary>
+    public ExecuteActionResult ExecutionResult { get; set; } = new(
+        Executed: true,
+        Confirmed: true,
+        Verdict: "resolved",
+        Summary: "The error rate went from 18.0% to 0.2%: the symptom is gone.",
+        Error: null,
+        RawJson: """{"executed":true,"confirmed":true,"verification":{"verdict":"resolved"}}""");
+
+    public Task<ExecuteActionResult> ExecuteActionAsync(
+        ExecuteActionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (FailWith is { } reason)
+        {
+            throw new AiServiceUnavailableException(reason);
+        }
+
+        Executions.Add(request);
+
+        return Task.FromResult(ExecutionResult);
     }
 }
 

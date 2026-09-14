@@ -52,6 +52,12 @@ public sealed class AiServiceClient : IAiServiceClient
     /// <summary>Named so the timeout and base address are configured once, at registration.</summary>
     public const string HttpClientName = "ai-service";
 
+    /// <summary>
+    /// How long an approved action may take. Generous, and deliberately so: the call runs the
+    /// tool, waits out a settle window and re-measures the symptom before answering.
+    /// </summary>
+    public static readonly TimeSpan ExecuteTimeout = TimeSpan.FromMinutes(3);
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -123,6 +129,109 @@ public sealed class AiServiceClient : IAiServiceClient
         throw new AiServiceUnavailableException(
             $"The AI service refused the investigation with {(int)response.StatusCode}: {detail}");
     }
+
+    public async Task<ExecuteActionResult> ExecuteActionAsync(
+        ExecuteActionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var client = _clients.CreateClient(HttpClientName);
+
+        // Its own timeout, because this call waits for a settle window and a re-measurement
+        // rather than for an acknowledgement. The named client's timeout is sized for the
+        // latter, and a remediation that is cut off halfway has still changed the system.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ExecuteTimeout);
+
+        var body = new
+        {
+            tool = request.Tool,
+            arguments = Arguments(request.ArgumentsJson),
+            approval_token = request.ApprovalToken,
+            service = request.Service,
+            investigation_id = request.InvestigationId,
+        };
+
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await client.PostAsJsonAsync(
+                $"/actions/{request.RecommendationId}/execute", body, Json, timeout.Token);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            throw new AiServiceUnavailableException(
+                $"The AI service at {_options.BaseUrl} did not answer: {exception.Message}");
+        }
+
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new AiServiceUnavailableException(
+                $"The AI service refused the action ({(int)response.StatusCode}): {Trim(payload)}");
+        }
+
+        return Read(payload);
+    }
+
+    /// <summary>The execution response, read defensively: a field that moved must not lose the outcome.</summary>
+    private static ExecuteActionResult Read(string payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        var verification = root.TryGetProperty("verification", out var found)
+            ? found
+            : default;
+
+        return new ExecuteActionResult(
+            Executed: root.TryGetProperty("executed", out var executed) && executed.GetBoolean(),
+            Confirmed: root.TryGetProperty("confirmed", out var confirmed) && confirmed.GetBoolean(),
+            Verdict: Text(verification, "verdict") ?? "unknown",
+            Summary: Text(verification, "summary") ?? string.Empty,
+            Error: Text(root, "error"),
+
+            // The whole body is kept: `recommendations.execution_result` is an audit record, and
+            // a projection of it made by this method would be an audit of what this method
+            // thought was interesting.
+            RawJson: payload);
+    }
+
+    private static string? Text(JsonElement element, string property) =>
+        element.ValueKind is JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind is JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    /// <summary>The stored arguments as an object, or an empty one. Never null: the hash covers it.</summary>
+    private static JsonElement Arguments(string? argumentsJson)
+    {
+        if (!string.IsNullOrWhiteSpace(argumentsJson))
+        {
+            try
+            {
+                using var parsed = JsonDocument.Parse(argumentsJson);
+
+                if (parsed.RootElement.ValueKind is JsonValueKind.Object)
+                {
+                    return parsed.RootElement.Clone();
+                }
+            }
+            catch (JsonException)
+            {
+                // Falls through to the empty object. A recommendation whose arguments will not
+                // parse cannot be executed with them, and the approval hash will refuse it.
+            }
+        }
+
+        using var empty = JsonDocument.Parse("{}");
+
+        return empty.RootElement.Clone();
+    }
+
+    private static string Trim(string payload) =>
+        payload.Length <= 400 ? payload : payload[..400];
 
     private static async Task<string> Detail(HttpResponseMessage response, CancellationToken cancellationToken)
     {
