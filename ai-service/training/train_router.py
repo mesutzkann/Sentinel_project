@@ -42,6 +42,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 DEFAULT_OUT = _REPO_ROOT / "models" / "sentinel-router"
 
+#: What the Modelfile imports. Written by llama.cpp's converter, not by this script — see
+#: :func:`merge`, which explains why the safetensors directory beside it cannot be imported.
+GGUF_NAME = "sentinel-router-q8_0.gguf"
+
 # From docs/planning.md §8. Targeting every projection rather than only q and v because the task
 # is classification into a fixed vocabulary the base model does not have — the MLP is where that
 # lands, and r=16 over seven modules is still under 40 MB of adapter.
@@ -241,11 +245,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def merge(args: argparse.Namespace, adapter: Path) -> None:
-    """Fold the adapter into the base weights and write a model Ollama can import.
+    """Fold the adapter into the base weights and write the Modelfile that imports them.
 
-    Ollama reads a safetensors directory for supported architectures, so this is the whole of
-    the export: no llama.cpp checkout, no GGUF conversion step to keep working. The Modelfile
-    beside it pins temperature 0, because a router that answers differently on Tuesday is a
+    **Ollama cannot import the safetensors directory this writes.** It accepts it, and produces
+    a model that answers "@@@@@@@@" to every question while the identical weights route
+    perfectly under transformers. The export therefore goes through llama.cpp's
+    `convert_hf_to_gguf.py`, and the Modelfile below points at the GGUF that produces — which is
+    why it names a file this function does not create. This docstring used to claim the opposite
+    and the Modelfile used to say `FROM ./merged`; the hand-fix lived on disk, `models/` is
+    gitignored, and the next merge quietly put the broken import back. The generator is the only
+    place a fix survives.
+
+    The Modelfile pins temperature 0, because a router that answers differently on Tuesday is a
     router whose benchmark means nothing.
     """
     import torch
@@ -276,7 +287,11 @@ def merge(args: argparse.Namespace, adapter: Path) -> None:
     modelfile.write_text(
         "\n".join(
             [
-                "FROM ./merged",
+                f"FROM ./{GGUF_NAME}",
+                "",
+                "# Q8_0 rather than f16, and for latency rather than disk. Untying Qwen's output",
+                "# projection makes the f16 GGUF 3.55 GB — most of a 6 GB card, where the router",
+                "# measured 2482 ms a question against a 150 ms target. Q8_0 is 1.9 GB.",
                 "",
                 "# Zero, and not a preference: the routing benchmark compares models, and a",
                 "# sampler in the middle of that comparison measures the sampler.",
@@ -293,7 +308,9 @@ def merge(args: argparse.Namespace, adapter: Path) -> None:
 
     print(
         f"Merged model in {target}\n"
-        f"Import it with:  ollama create sentinel-router -f {modelfile}",
+        f"Convert it:  python <llama.cpp>/convert_hf_to_gguf.py {target} "
+        f"--outfile {args.output / GGUF_NAME} --outtype q8_0\n"
+        f"Then import:  ollama rm sentinel-router; ollama create sentinel-router -f {modelfile}",
         file=sys.stderr,
     )
 

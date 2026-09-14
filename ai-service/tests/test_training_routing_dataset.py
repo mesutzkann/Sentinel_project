@@ -8,6 +8,7 @@ the accuracy measured on test is memorisation; and if the labels can drift from
 from __future__ import annotations
 
 import re
+from dataclasses import asdict
 
 import pytest
 
@@ -16,9 +17,13 @@ from routing.schema import Intent
 from training.routing_dataset import (
     DEFAULT_VARIANTS,
     SPLITS,
+    Example,
     add_typos,
+    append_paraphrase_cache,
+    choose_seeds,
     expand,
     normalise,
+    read_paraphrase_cache,
     split,
     validate,
 )
@@ -150,3 +155,54 @@ def test_the_templates_cover_every_intent_in_both_languages() -> None:
 
         assert "en" in languages, f"{intent} has no English phrasing"
         assert "tr" in languages, f"{intent} has no Turkish phrasing"
+
+
+def test_every_intent_has_enough_phrasings_per_language_to_reach_training() -> None:
+    """The invariant behind Phase 8's worst number.
+
+    The split reserves one phrasing per intent for validation and two for test. With a single
+    mixed-language phrasing per intent, several intents had that one phrasing reserved away and
+    the model saw no mixed question for them at all in training — it scored 0.11 on mixed against
+    0.90 on English. Four per language per intent is the floor that makes that impossible.
+    """
+    counts: dict[tuple[Intent, str], int] = {}
+
+    for template in ALL_TEMPLATES:
+        counts[(template.intent, template.language)] = (
+            counts.get((template.intent, template.language), 0) + 1
+        )
+
+    for intent in Intent:
+        for language in ("en", "tr", "mixed"):
+            found = counts.get((intent, language), 0)
+
+            assert found >= 4, f"{intent.value}/{language} has {found} phrasings, needs 4"
+
+
+def test_the_weak_groups_get_most_of_the_paraphrasing(examples) -> None:
+    """Seeds are drawn where the router failed, not uniformly across the dataset."""
+    seeds = choose_seeds(examples, 300)
+    share = sum(1 for seed in seeds if seed.language == "mixed") / len(seeds)
+    everywhere = sum(1 for row in examples if row.language == "mixed") / len(examples)
+
+    assert share > everywhere * 2
+    assert len(seeds) == 300
+    assert len({seed.id for seed in seeds}) == 300, "a seed must not be drawn twice"
+
+
+def test_a_resumed_paraphrase_run_does_not_ask_twice(tmp_path, examples) -> None:
+    """The cache is keyed by seed and model, and records the seeds that yielded nothing."""
+    cache = tmp_path / "paraphrases.jsonl"
+    seed = examples[0]
+    rewrite = Example(**{**asdict(seed), "query": "something else entirely", "source": "paraphrase"})
+
+    append_paraphrase_cache(cache, "qwen2.5:3b-instruct", seed, [rewrite])
+    append_paraphrase_cache(cache, "qwen2.5:3b-instruct", examples[1], [])
+
+    done, rows = read_paraphrase_cache(cache, "qwen2.5:3b-instruct")
+
+    assert done == {seed.id, examples[1].id}
+    assert [row.query for row in rows] == ["something else entirely"]
+    assert rows[0].intent == seed.intent
+
+    assert read_paraphrase_cache(cache, "qwen2.5:7b-instruct") == (set(), [])

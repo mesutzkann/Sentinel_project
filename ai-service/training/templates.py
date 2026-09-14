@@ -80,9 +80,13 @@ SERVICES: tuple[str, ...] = ("gateway", "users", "orders", "payments", "notifica
 
 # --------------------------------------------------------------------------- templates ----
 #
-# Roughly five phrasings per language per intent, plus a mixed-language block. Each intent's
-# comment says what separates it from the one it is most easily confused with -- which is what
-# the model has to learn, and what a template blurring the two would teach it not to.
+# Eight or so phrasings per language per intent, plus four in the mixed-language block. Each
+# intent's comment says what separates it from the one it is most easily confused with -- which
+# is what the model has to learn, and what a template blurring the two would teach it not to.
+#
+# The counts are not decoration: the split reserves one phrasing per intent for validation and
+# two for test, so an intent-language pair with fewer than four phrasings can end up with none
+# in training at all. That is exactly what happened to `mixed` in the first Phase 8 build.
 
 PHRASINGS: dict[tuple[Intent, str], tuple[str, ...]] = {
     # FULL_INVESTIGATION: something is wrong and the asker wants the cause, not a signal.
@@ -171,29 +175,45 @@ PHRASINGS: dict[tuple[Intent, str], tuple[str, ...]] = {
         "{service} için {hours} saatlik {percentile} nasıl görünüyor",
     ),
     # TRACE_QUERY: the shape of one request across services.
+    #
+    # The tuned router scored 0.22 here and read twelve of these as LOG_QUERY, which is what
+    # "show me a failed request" deserves: it opens the same way a request for log lines does.
+    # The last three phrasings in each language name the artefact — trace, span, hop — because
+    # that noun is the only thing separating this intent from "hand me the lines" and from
+    # PERFORMANCE_ANALYSIS's "why is it slow".
     (Intent.TRACE_QUERY, "en"): (
         "show me a failed request through {service}",
-        "where does a checkout spend its time",
-        "find the slowest spans in {service}",
         "pull a trace for {service} from the last {minutes} minutes",
-        "which span is taking the time in {service}",
         "follow one request end to end through {service}",
         "what does a single {service} call look like right now",
         "open a recent {service} request and show the steps",
+        "give me the span breakdown for one {service} request",
+        "I want the trace, not the log lines, for {service}",
+        "how many hops does a {service} request make before it answers",
     ),
     (Intent.TRACE_QUERY, "tr"): (
         "{service} üzerinden geçen başarısız bir isteği göster",
-        "bir checkout zamanını nerede harcıyor",
-        "{service} içindeki en yavaş span'leri bul",
         "{service} için son {minutes} dakikadan bir iz getir",
-        "{service}'ta zamanı hangi adım yiyor",
         "{service} üzerinden bir isteği baştan sona takip et",
         "{service}'a giden tek bir çağrı şu an neye benziyor",
         "{service}'ın son isteklerinden birini açıp adımları göster",
+        "{service} için tek bir isteğin span dökümünü ver",
+        "{service} için log satırı değil iz istiyorum",
+        "bir {service} isteği cevap verene kadar kaç durak geçiyor",
     ),
     # PERFORMANCE_ANALYSIS: it is slow. Nothing said about errors.
+    #
+    # The line against TRACE_QUERY is the plan, not the vocabulary: "where is the time going" and
+    # "the slowest spans" are `metrics-mcp/get_response_time` plus `traces-mcp/get_slowest_spans`,
+    # which `plans.py` files under this intent — asking about *traffic*. TRACE_QUERY is one
+    # request and its path, which is `get_recent_traces`. Six phrasings about where the time goes
+    # sat under TRACE_QUERY until Phase 8 measured 0.13 here and twelve TRACE rows read as
+    # LOG_QUERY; they were labelled against the table the planner acts on, so they moved here.
     (Intent.PERFORMANCE_ANALYSIS, "en"): (
         "why is {service} taking so long",
+        "where does a checkout spend its time",
+        "find the slowest spans in {service}",
+        "which span is taking the time in {service}",
         "{service} got sluggish this afternoon, what changed in the timings",
         "requests to {service} are crawling, dig into it",
         "{service} used to answer instantly and now it does not",
@@ -204,6 +224,9 @@ PHRASINGS: dict[tuple[Intent, str], tuple[str, ...]] = {
     ),
     (Intent.PERFORMANCE_ANALYSIS, "tr"): (
         "{service} neden bu kadar uzun sürüyor",
+        "bir checkout zamanını nerede harcıyor",
+        "{service} içindeki en yavaş span'leri bul",
+        "{service}'ta zamanı hangi adım yiyor",
         "{service} öğleden sonra ağırlaştı, sürelerde ne değişti",
         "{service}'a giden istekler sürünüyor, araştır",
         "{service} eskiden anında dönüyordu, şimdi dönmüyor",
@@ -402,50 +425,101 @@ PHRASINGS: dict[tuple[Intent, str], tuple[str, ...]] = {
         "yanan bir yer var mı",
         "bu sabahki tablo ne",
     ),
+    # The mixed block: Turkish grammar carrying English technical nouns, which is how this team
+    # actually types. **Four phrasings per intent, not one.** With one, the split's floor — a
+    # phrasing to validation and two to test for every intent — reserved several intents' only
+    # mixed template away from training, and the tuned router scored 0.11 on mixed against 0.90
+    # on English. Four is the smallest number that leaves at least one in train for every intent
+    # however the shuffle falls.
     (Intent.ERROR_ANALYSIS, "mixed"): (
         "{service}'ta {code} alıyoruz, exception ne",
+        "{service} son {minutes} dakikada kaç tane {exception} throw etti",
+        "{service}'ın error'larını type'a göre breakdown eder misin",
+        "{service}'ta hâlâ {exception} var mı, count verir misin",
     ),
     (Intent.FULL_INVESTIGATION, "mixed"): (
         "{service} down gibi, investigate eder misin",
+        "{service}'ta bir sorun var, root cause'u bulur musun",
+        "{minutes} dakikadır {service} için alert geliyor, ne oluyor",
+        "{service} incident'ında bana symptom değil cause lazım",
     ),
     (Intent.PERFORMANCE_ANALYSIS, "mixed"): (
         "{service} latency fırladı, bakar mısın",
+        "{service} neden bu kadar yavaş, sebebini bul",
+        "{service}'ın response time'ı niye bu kadar arttı",
+        "{service} bu öğleden sonra slow'ladı, sürelerde ne değişti",
     ),
     (Intent.LOG_QUERY, "mixed"): (
         "{service} loglarını tail eder misin",
+        "{service}'ın son {minutes} dakikalık log'larını dök",
+        "{service} log'larında {exception} grep'ler misin",
+        "{service} şu an ne yazıyor, satırları olduğu gibi ver",
     ),
     (Intent.DEPLOYMENT_CHECK, "mixed"): (
         "{service}'a deploy geçtik mi bugün",
+        "{service}'ın son release'i ne zaman çıktı",
+        "son {hours} saatte {service}'a bir change merge edildi mi",
+        "{service} için son deployment'ın versiyonu ne",
     ),
     (Intent.DATABASE_HEALTH, "mixed"): (
         "{service} connection pool doldu mu acaba",
+        "database tarafında lock ya da blocking var mı",
+        "postgres'te {service} kaç connection tutuyor",
+        "db healthy mi, bekleyen session var mı",
     ),
     (Intent.METRIC_QUERY, "mixed"): (
         "{service} cpu kaçta",
+        "{service}'ın {percentile} değeri şu an ne",
+        "{service} ne kadar memory kullanıyor",
+        "{service} için son {minutes} dakikanın request rate'ini ver",
     ),
     (Intent.TRACE_QUERY, "mixed"): (
         "{service} için bir trace açar mısın",
+        "{service}'ta tek bir request'in span'lerini listeler misin",
+        "{service} üzerinden bir request'i end to end takip et",
+        "{service}'ın failed request'lerinden birinin trace'ini göster",
     ),
     (Intent.CONFIG_LOOKUP, "mixed"): (
         "{service}'ın timeout config'i ne",
+        "{service}'ta {setting} kaça set edilmiş",
+        "{service} için current config'i göster",
+        "{service}'ın env'inde {setting} ne durumda",
     ),
     (Intent.CODE_LOOKUP, "mixed"): (
         "{thing} hangi dosyada, kodu göster",
+        "{thing} nerede implement edilmiş",
+        "{service}'ta {thing}'in code'unu bulur musun",
+        "{thing} hangi class'ta handle ediliyor",
     ),
     (Intent.HISTORICAL_SIMILARITY, "mixed"): (
         "bu issue daha önce oldu mu",
+        "{service}'ta geçmişte benzer bir incident var mıydı",
+        "aynı error'ı daha önce de görmüş müydük",
+        "bu pattern history'de tekrar ediyor mu",
     ),
     (Intent.REMEDIATION_QUESTION, "mixed"): (
         "{service} için fix ne olmalı",
+        "{service}'ı nasıl recover ederiz",
+        "bunu mitigate etmek için ne yapmamız lazım",
+        "{service} için rollback mı yapsak, öneri ver",
     ),
     (Intent.SERVICE_TOPOLOGY, "mixed"): (
         "{service} hangi servisleri call ediyor",
+        "{service}'ın dependency'leri neler",
+        "{service}'a kim request atıyor",
+        "servisler arası call graph'ı çıkarır mısın",
     ),
     (Intent.KNOWLEDGE_QUESTION, "mixed"): (
         "deadlock için runbook var mı",
+        "{service} için onboarding doc'u nerede",
+        "connection pool tuning ile ilgili bir guide var mı",
+        "incident response prosedürü nasıl işliyor, doc'u paylaş",
     ),
     (Intent.GENERAL_QUESTION, "mixed"): (
         "genel durum nasıl, her şey ok mi",
+        "bugün status ne, özet geç",
+        "bir update alabilir miyim",
+        "şu an genel olarak her şey fine mı",
     ),
 }
 

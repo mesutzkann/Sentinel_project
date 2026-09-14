@@ -263,11 +263,49 @@ ASKING: dict[Intent, str] = {
 }
 
 
+# Where to spend the rewrites, from the Phase 8 test split rather than from a hunch: the tuned
+# router scored 0.11 on mixed-language questions against 0.90 on English, 0.13 on
+# PERFORMANCE_ANALYSIS and 0.22 on TRACE_QUERY. A seed's weight is the product of whatever it
+# matches, so a mixed TRACE_QUERY question is twelve times as likely to be drawn as an English
+# question about deployments. Uniform sampling spends three quarters of a 75-minute run on the
+# intents that already score 0.90.
+PARAPHRASE_WEIGHTS_BY_LANGUAGE: dict[str, float] = {"mixed": 4.0}
+PARAPHRASE_WEIGHTS_BY_INTENT: dict[Intent, float] = {
+    Intent.TRACE_QUERY: 3.0,
+    Intent.PERFORMANCE_ANALYSIS: 3.0,
+}
+
+#: One line per *completed seed*, written as the run goes. See :func:`paraphrase`.
+PARAPHRASE_CACHE = "paraphrases.jsonl"
+
+
+def paraphrase_weight(example: Example) -> float:
+    return PARAPHRASE_WEIGHTS_BY_LANGUAGE.get(
+        example.language, 1.0
+    ) * PARAPHRASE_WEIGHTS_BY_INTENT.get(Intent(example.intent), 1.0)
+
+
+def choose_seeds(examples: list[Example], limit: int) -> list[Example]:
+    """Weighted sampling without replacement, deterministic given :data:`SEED`.
+
+    Efraimidis-Spirakis: give each row the key ``random() ** (1 / weight)`` and take the largest
+    keys. Drawing with replacement instead would hand the same question to the model twice, and
+    the second answer would be thrown away by the deduplicator after paying for it.
+    """
+    rng = random.Random(SEED + 2)
+    keyed = sorted(
+        (rng.random() ** (1.0 / paraphrase_weight(example)), example) for example in examples
+    )
+
+    return [example for _, example in keyed[-min(limit, len(examples)) :]]
+
+
 async def paraphrase(
     examples: list[Example],
     per_query: int,
     model: str,
     limit: int,
+    cache: Path | None = None,
 ) -> list[Example]:
     """Ask the local model to rewrite a sample of the queries.
 
@@ -275,18 +313,32 @@ async def paraphrase(
     drifts into another intent is a mislabelled row, and mislabelled rows are worse than no rows.
     The prompt pins what the question asks for, and anything that comes back empty, too long, or
     identical to its seed is dropped rather than kept and hoped over.
+
+    **The run writes as it goes.** A seed's accepted rewrites are appended to ``cache`` as one
+    JSON line the moment they are accepted, and a rerun skips every seed already in there. This
+    step is an hour of local generation; holding all of it in memory until the end meant that
+    closing a laptop lid, or a single Ctrl-C when the progress line looked stalled, cost the
+    whole hour. Delete the cache file to start over, and note it is keyed by seed *and model* —
+    rewrites from a different paraphraser are not reused.
     """
     from app.config import settings
     from llm.base import LlmMessage, LlmOptions
     from llm.ollama_provider import OllamaLlmProvider
 
-    rng = random.Random(SEED + 2)
-    seeds = rng.sample(examples, k=min(limit, len(examples)))
+    seeds = choose_seeds(examples, limit)
+    done, out = read_paraphrase_cache(cache, model)
+
+    if done:
+        print(f"  resuming: {len(done)} seeds already done, {len(out)} rows", file=sys.stderr)
+
     provider = OllamaLlmProvider(settings().ollama_base_url, model, timeout_seconds=180)
-    out: list[Example] = []
     seen = {normalise(example.query) for example in examples}
+    seen |= {normalise(example.query) for example in out}
 
     for position, seed in enumerate(seeds, start=1):
+        if seed.id in done:
+            continue
+
         prompt = PARAPHRASE_PROMPT.format(
             count=per_query,
             query=seed.query,
@@ -302,6 +354,8 @@ async def paraphrase(
             print(f"  {seed.id}: {type(exc).__name__}: {exc}", file=sys.stderr)
             continue
 
+        accepted: list[Example] = []
+
         for line in completion.text.splitlines():
             candidate = clean_paraphrase(line)
             key = normalise(candidate)
@@ -310,16 +364,12 @@ async def paraphrase(
                 continue
 
             seen.add(key)
-            out.append(
-                Example(
-                    **{
-                        **asdict(seed),
-                        "id": f"P{len(out) + 1:05d}",
-                        "query": candidate,
-                        "source": "paraphrase",
-                    }
-                )
+            accepted.append(
+                Example(**{**asdict(seed), "query": candidate, "source": "paraphrase"})
             )
+
+        out += accepted
+        append_paraphrase_cache(cache, model, seed, accepted)
 
         if position % 25 == 0:
             print(
@@ -327,7 +377,55 @@ async def paraphrase(
                 file=sys.stderr,
             )
 
-    return out
+    # Numbered at the end rather than as they arrive, so a resumed run and a run that went
+    # through in one go produce the same ids for the same rows.
+    return [
+        Example(**{**asdict(row), "id": f"P{number:05d}"})
+        for number, row in enumerate(out, start=1)
+    ]
+
+
+def read_paraphrase_cache(cache: Path | None, model: str) -> tuple[set[str], list[Example]]:
+    """The seeds already rewritten by this model, and the rows they produced."""
+    if cache is None or not cache.exists():
+        return set(), []
+
+    done: set[str] = set()
+    rows: list[Example] = []
+
+    for line in cache.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+
+        entry = json.loads(line)
+
+        if entry.get("model") != model:
+            continue
+
+        done.add(entry["seed"])
+        rows += [Example(**row) for row in entry["rows"]]
+
+    return done, rows
+
+
+def append_paraphrase_cache(
+    cache: Path | None, model: str, seed: Example, rows: list[Example]
+) -> None:
+    """One line per seed, flushed. A seed that yielded nothing is still recorded as done.
+
+    Recording the empty ones is the point of writing per seed rather than per row: without it a
+    resumed run would ask the model again about every question whose rewrites all drifted, which
+    is the slowest third of the run.
+    """
+    if cache is None:
+        return
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"seed": seed.id, "model": model, "rows": [asdict(row) for row in rows]}
+
+    with cache.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        handle.flush()
 
 
 # Turkish that survives an ASCII keyboard: the letters, and the function words that appear in
@@ -409,30 +507,43 @@ def split(examples: list[Example]) -> dict[str, list[Example]]:
 
     out: dict[str, list[Example]] = {name: [] for name, _ in SPLITS}
 
-    for intent in sorted(by_intent):
+    for position, intent in enumerate(sorted(by_intent)):
         groups = sorted(by_intent[intent].items())
         rng.shuffle(groups)
         total = sum(len(rows) for _, rows in groups)
         targets = {name: share * total for name, share in SPLITS}
         counts = dict.fromkeys(targets, 0)
 
-        # Phrasings reserved before anything else, for every intent: one for validation and
-        # **two** for test. Allocating purely by shortfall left three intents with no test row at
-        # all; reserving only one left the test number for an intent resting on a single
-        # phrasing, where a keyword table that happens to match it scores 1.00 and one that does
-        # not scores 0.00. Neither is a measurement of intent accuracy. Two is still coarse and
-        # it is what seventeen phrasings per intent can afford.
-        floors = ["val", "test", "test"]
+        # Phrasings reserved before anything else: for every intent **and every language**, one
+        # phrasing for test, plus one for validation in one language per intent, rotating.
+        #
+        # Reserving per intent alone was not enough. Phase 8 measured mixed-language accuracy at
+        # 0.11 and the test split turned out to hold eleven mixed rows from two intents — a
+        # number too thin to mean anything, hiding a model that had barely been trained on mixed
+        # at all. A language the benchmark cannot report on is a language nobody fixes. The cost
+        # is that test runs a little over its tenth, which is the right thing to spend it on.
+        reserved: set[str] = set()
+        languages = sorted({row.language for rows in by_intent[intent].values() for row in rows})
 
-        for name, (_, rows) in zip(floors, groups, strict=False):
-            counts[name] += len(rows)
-            out[name].extend(rows)
+        for offset, language in enumerate(languages):
+            floors = ["test", "val"] if offset == position % len(languages) else ["test"]
+            candidates = [
+                (template, rows) for template, rows in groups if rows[0].language == language
+            ]
+
+            for name, (template, rows) in zip(floors, candidates, strict=False):
+                reserved.add(template)
+                counts[name] += len(rows)
+                out[name].extend(rows)
 
         # The rest goes wherever the shortfall is largest. Whole groups are indivisible, so the
         # shares land near the targets rather than on them — an intent with eleven phrasings
         # cannot be cut finer, and rounding by splitting one would put the same question on both
         # sides of the measurement.
-        for _, rows in groups[len(floors) :]:
+        for template, rows in groups:
+            if template in reserved:
+                continue
+
             target = max(targets, key=lambda name: targets[name] - counts[name])
             counts[target] += len(rows)
             out[target].extend(rows)
@@ -526,6 +637,18 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paraphrase-model", default="qwen2.5:7b-instruct")
     parser.add_argument("--paraphrase-seeds", type=int, default=420)
     parser.add_argument("--paraphrase-each", type=int, default=4)
+    parser.add_argument(
+        "--paraphrase-cache",
+        type=Path,
+        default=None,
+        help=f"where rewrites are written as they arrive (default: <output>/{PARAPHRASE_CACHE}); "
+        "a rerun skips the seeds already in it",
+    )
+    parser.add_argument(
+        "--fresh-paraphrases",
+        action="store_true",
+        help="ignore the cache and ask the model about every seed again",
+    )
     parser.add_argument("--report", action="store_true", help="report what is on disk and stop")
     args = parser.parse_args(argv)
 
@@ -543,8 +666,18 @@ async def main(argv: list[str] | None = None) -> int:
     print(f"{len(examples)} from templates", file=sys.stderr)
 
     if args.paraphrase:
+        cache = args.paraphrase_cache or args.output / PARAPHRASE_CACHE
+
+        if args.fresh_paraphrases and cache.exists():
+            print(f"discarding {cache}", file=sys.stderr)
+            cache.unlink()
+
         rewritten = await paraphrase(
-            examples, args.paraphrase_each, args.paraphrase_model, args.paraphrase_seeds
+            examples,
+            args.paraphrase_each,
+            args.paraphrase_model,
+            args.paraphrase_seeds,
+            cache=cache,
         )
         print(f"{len(rewritten)} from paraphrasing", file=sys.stderr)
         examples += rewritten
