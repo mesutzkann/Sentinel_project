@@ -33,6 +33,7 @@ from agents.state_machine import AgentEvent, EventType, Node, Transition
 from agents.states import State
 from rag.documents import RetrievedChunk, SourceType
 from rag.retrievers import Retriever
+from rag.similarity import IncidentSimilarity, SimilarIncident
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,11 @@ WEIGHT_DOCUMENT_TAIL = 0.35
 # one runbook.
 DEFAULT_DOCUMENTS = 3
 
+# Past incidents named as precedents. Three, and usually fewer: the measured similarities cluster
+# between 0.63 and 0.75 for anything relevant, so a fourth is rarely above the threshold and,
+# when it is, it is the incident that resembles everything.
+DEFAULT_PRECEDENTS = 3
+
 # Past incidents and postmortems are a different kind of fact from a runbook: one says this
 # happened here before, the other says this is how the failure works. The confidence score's
 # diversity bonus counts them separately because they corroborate independently.
@@ -64,10 +70,14 @@ class SearchHistoryNode(Node):
         *,
         k: int = 5,
         documents: int = DEFAULT_DOCUMENTS,
+        similarity: IncidentSimilarity | None = None,
+        precedents: int = DEFAULT_PRECEDENTS,
     ) -> None:
         self._retriever = retriever
         self._k = k
         self._documents = documents
+        self._similarity = similarity
+        self._precedents = precedents
 
     @property
     def state(self) -> State:
@@ -87,7 +97,16 @@ class SearchHistoryNode(Node):
 
             return self._advance(ctx, message=note, payload={"failed": True})
 
-        items = self._to_evidence(result.chunks)
+        similar = await self._similar(ctx, query)
+        items = self._to_evidence(result.chunks, similar)
+        items += [
+            self._precedent_evidence(found)
+            for found in similar
+            # Retrieval and similarity ask different questions and often return the same
+            # document. Adding it twice would give the confidence score two facts where there is
+            # one, and corroboration is exactly what that score is counting.
+            if found.document_id not in {(item.raw or {}).get("document_id") for item in items}
+        ]
 
         if not items:
             note = f"nothing in the knowledge base matched: {query}"
@@ -150,8 +169,59 @@ class SearchHistoryNode(Node):
         """
         return None
 
-    def _to_evidence(self, chunks: list[RetrievedChunk]) -> list[EvidenceItem]:
+    async def _similar(self, ctx: InvestigationContext, query: str) -> list[SimilarIncident]:
+        """Past incidents this one resembles, or nothing if the comparison is unavailable.
+
+        ``exclude`` is the incident being investigated: since Phase 9 a concluded investigation
+        writes itself into this corpus, and a second run would otherwise find its own write-up
+        and report the incident as a precedent for itself.
+        """
+        if self._similarity is None:
+            return []
+
+        try:
+            return await self._similarity.find(
+                query,
+                exclude=ctx.incident_code,
+                limit=self._precedents,
+                service=ctx.target_service,
+            )
+        except Exception as exc:  # noqa: BLE001 - same rule as retrieval: not the run's failure
+            ctx.note(f"similarity search failed: {type(exc).__name__}: {exc}")
+            logger.warning("SEARCH_HISTORY: similarity search failed: %s", exc)
+
+            return []
+
+    def _precedent_evidence(self, found: SimilarIncident) -> EvidenceItem:
+        """"91% similar to INC-00032" — a claim a person can act on.
+
+        Weighted like any other document and no higher. A precedent says this shape of failure
+        has happened here before, which is a reason to look and never a reason to conclude.
+        """
+        return EvidenceItem(
+            source=EvidenceSource.HISTORICAL_INCIDENT,
+            summary=f"{found.sentence()} — {found.excerpt}",
+            weight=WEIGHT_DOCUMENT_TAIL,
+            raw={
+                "document_id": found.document_id,
+                "title": found.title,
+                "external_id": found.external_id,
+                "source_type": found.source_type,
+                "service": found.service,
+                "path": found.path,
+                "similarity": round(found.similarity, 4),
+                "content": found.excerpt,
+            },
+            tool="rag/similarity",
+        )
+
+    def _to_evidence(
+        self,
+        chunks: list[RetrievedChunk],
+        similar: list[SimilarIncident] | None = None,
+    ) -> list[EvidenceItem]:
         """One fact per document, best chunk first, capped."""
+        scores = {found.document_id: found for found in similar or []}
         seen: dict[str, RetrievedChunk] = {}
 
         for chunk in chunks:
@@ -163,6 +233,11 @@ class SearchHistoryNode(Node):
             stored = chunk.chunk
             label = stored.external_id or stored.path or stored.title
             excerpt = " ".join(stored.content.split())[:200]
+            found = scores.get(stored.document_id)
+
+            # A retrieved document that is also a measured precedent says so in its own summary
+            # rather than arriving twice.
+            prefix = f"{found.percent}% similar — " if found else ""
 
             items.append(
                 EvidenceItem(
@@ -171,7 +246,7 @@ class SearchHistoryNode(Node):
                         if stored.source_type in _HISTORICAL
                         else EvidenceSource.RAG_DOCUMENT
                     ),
-                    summary=f"{stored.source_type} {label}: {excerpt}",
+                    summary=f"{prefix}{stored.source_type} {label}: {excerpt}",
                     weight=WEIGHT_DOCUMENT if position == 0 else WEIGHT_DOCUMENT_TAIL,
                     raw={
                         "chunk_id": stored.chunk_id,
@@ -184,6 +259,7 @@ class SearchHistoryNode(Node):
                         "section": stored.section,
                         "content": stored.content,
                         "rank": chunk.rank,
+                        **({"similarity": round(found.similarity, 4)} if found else {}),
                     },
                     tool=f"rag/{chunk.retriever}",
                 )

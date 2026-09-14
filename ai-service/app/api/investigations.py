@@ -49,6 +49,7 @@ from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpToolRegistry
 from rag.memory import IncidentMemory
 from rag.retrievers import Retriever
+from rag.similarity import IncidentSimilarity
 from routing.factory import build_router
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,7 @@ class InvestigationService:
                 mcp_client=await self._mcp_client(),
                 retriever=await self._retriever(),
                 router=self._router,
+                similarity=await self._similarity(),
                 emit=emit,
             )
         except Exception as exc:  # noqa: BLE001 - reported as a failed investigation, not a crash
@@ -293,6 +295,17 @@ class InvestigationService:
         policy = McpPolicy(registry, ApprovalVerifier(self._config.approval_secret or None))
 
         return get_client(registry, policy, self._config)
+
+    async def _similarity(self) -> IncidentSimilarity:
+        """The precedent finder: the same embedding model and store the retriever uses.
+
+        Its own object rather than a method on the retriever, because it asks a different
+        question — "which past incident is this like", answered in cosine — and the retriever's
+        fused scores are not similarities.
+        """
+        rag = get_rag_service(self._config)
+
+        return IncidentSimilarity(rag.embeddings, rag.store)
 
     async def _retriever(self) -> Retriever:
         rag = get_rag_service(self._config)

@@ -15,6 +15,7 @@ from agents.state_machine import EventType
 from agents.states import State
 from rag.documents import RetrievedChunk, SourceType, StoredChunk
 from rag.retrievers import RetrievalResult
+from rag.similarity import SimilarIncident
 
 
 def _chunk(
@@ -224,3 +225,112 @@ async def test_each_document_is_announced_with_its_path() -> None:
     assert len(transition.events) == 1
     assert transition.events[0].type is EventType.EVIDENCE_FOUND
     assert (transition.events[0].payload or {})["path"] == "runbooks/pool.md"
+
+
+# ------------------------------------------------------------------ precedent ----
+
+
+class _FakeSimilarity:
+    """Answers with fixed precedents, and records what it was asked."""
+
+    def __init__(self, found: list[SimilarIncident], raises: Exception | None = None) -> None:
+        self._found = found
+        self._raises = raises
+        self.calls: list[tuple[str, str | None, str | None]] = []
+
+    async def find(self, summary, *, exclude=None, limit=3, service=None):  # type: ignore[no-untyped-def]
+        self.calls.append((summary, exclude, service))
+
+        if self._raises is not None:
+            raise self._raises
+
+        return self._found[:limit]
+
+
+def _precedent(external_id: str, similarity: float, document_id: str = "") -> SimilarIncident:
+    return SimilarIncident(
+        external_id=external_id,
+        title=f"{external_id} — orders timing out after a pool change",
+        similarity=similarity,
+        document_id=document_id or f"d-{external_id}",
+        source_type="postmortem",
+        service="orders",
+        path=f"incidents/{external_id}.md",
+        excerpt="The pool was cut from 200 to 20.",
+    )
+
+
+async def test_a_precedent_becomes_a_fact_the_investigation_can_cite() -> None:
+    """Phase 9's done criterion: "this is 71% like INC-00001" reaches the evidence list."""
+    node = SearchHistoryNode(
+        _FakeRetriever([_chunk("runbook-pool", SourceType.RUNBOOK, rank=1)]),
+        similarity=_FakeSimilarity([_precedent("INC-00001", 0.71)]),
+    )
+    ctx = _context()
+
+    await node.run(ctx)
+
+    precedent = [item for item in ctx.evidence if item.tool == "rag/similarity"]
+
+    assert len(precedent) == 1
+    assert precedent[0].summary.startswith("71% similar to INC-00001")
+    assert precedent[0].source is EvidenceSource.HISTORICAL_INCIDENT
+    assert precedent[0].raw["similarity"] == 0.71
+
+    # Weighted like any other document: a precedent is a reason to look, never to conclude.
+    assert precedent[0].weight <= WEIGHT_DOCUMENT
+
+
+async def test_a_document_that_is_both_retrieved_and_alike_is_one_fact() -> None:
+    """Two facts where there is one would be corroboration the confidence score counts twice."""
+    node = SearchHistoryNode(
+        _FakeRetriever(
+            [_chunk("d-INC-00001", SourceType.POSTMORTEM, rank=1, external_id="INC-00001")]
+        ),
+        similarity=_FakeSimilarity([_precedent("INC-00001", 0.71, document_id="d-INC-00001")]),
+    )
+    ctx = _context()
+
+    await node.run(ctx)
+
+    assert len(ctx.evidence) == 1
+    assert ctx.evidence[0].summary.startswith("71% similar — postmortem INC-00001")
+    assert ctx.evidence[0].raw["similarity"] == 0.71
+
+
+async def test_the_incident_is_excluded_from_its_own_precedents() -> None:
+    similarity = _FakeSimilarity([])
+    node = SearchHistoryNode(_FakeRetriever([]), similarity=similarity)
+
+    await node.run(_context(incident_code="INC-00142"))
+
+    _, exclude, service = similarity.calls[0]
+
+    assert exclude == "INC-00142"
+    assert service == "orders"
+
+
+async def test_the_comparison_failing_does_not_end_the_run() -> None:
+    """Same rule as retrieval: the knowledge base is not the investigation."""
+    node = SearchHistoryNode(
+        _FakeRetriever([_chunk("runbook-pool", SourceType.RUNBOOK, rank=1)]),
+        similarity=_FakeSimilarity([], raises=RuntimeError("pgvector is not listening")),
+    )
+    ctx = _context()
+
+    transition = await node.run(ctx)
+
+    assert transition.next_state is not State.FAILED
+    assert len(ctx.evidence) == 1
+    assert any("similarity search failed" in note for note in ctx.notes)
+
+
+async def test_without_a_comparison_the_node_behaves_as_it_did_before() -> None:
+    """The parameter is optional: the reasoning benchmark builds this node without a store."""
+    node = SearchHistoryNode(_FakeRetriever([_chunk("r", SourceType.RUNBOOK, rank=1)]))
+    ctx = _context()
+
+    await node.run(ctx)
+
+    assert len(ctx.evidence) == 1
+    assert ctx.evidence[0].tool.startswith("rag/")

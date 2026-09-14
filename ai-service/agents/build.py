@@ -44,6 +44,7 @@ from agents.states import TERMINAL_STATES, State
 from llm.base import LocalLlmProvider
 from mcp_client.client import McpClient
 from rag.retrievers import Retriever
+from rag.similarity import IncidentSimilarity
 from routing.base import Router
 
 
@@ -66,6 +67,7 @@ def build_nodes(
     prompt_version: str | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
+    similarity: IncidentSimilarity | None = None,
 ) -> dict[State, Node]:
     """One node per non-terminal state.
 
@@ -86,7 +88,7 @@ def build_nodes(
         CollectDatabaseNode(mcp_client),
         CheckDeploymentsNode(mcp_client),
         InspectCodeNode(mcp_client),
-        SearchHistoryNode(retriever, documents=history_documents),
+        SearchHistoryNode(retriever, documents=history_documents, similarity=similarity),
         GenerateHypothesesNode(provider, **reasoning),
         CollectAdditionalEvidenceNode(),
         RankHypothesesNode(),
@@ -128,6 +130,7 @@ def build_machine(
     prompt_version: str | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
+    similarity: IncidentSimilarity | None = None,
     max_transitions: int = DEFAULT_MAX_TRANSITIONS,
 ) -> StateMachine:
     """The whole agent, ready to run one investigation.
@@ -146,6 +149,7 @@ def build_machine(
             prompt_version=prompt_version,
             max_attempts=max_attempts,
             history_documents=history_documents,
+            similarity=similarity,
         ),
         emit=emit,
         max_transitions=max_transitions,

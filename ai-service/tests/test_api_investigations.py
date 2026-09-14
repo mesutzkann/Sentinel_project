@@ -191,6 +191,7 @@ def stub_dependencies_without_postmortem(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(InvestigationService, "_mcp_client", none)
     monkeypatch.setattr(InvestigationService, "_retriever", none)
+    monkeypatch.setattr(InvestigationService, "_similarity", none)
 
 
 async def test_a_run_records_its_result_when_it_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
