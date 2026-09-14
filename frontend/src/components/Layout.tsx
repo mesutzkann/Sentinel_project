@@ -3,9 +3,12 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../features/auth/authStore';
 
 /**
- * Navigation is declared for the whole 12-phase system, not just what Phase 1 ships. Sections
- * that do not exist yet are disabled with the phase that brings them, so the shape of the
- * finished product is visible from the first screen.
+ * Every section of the system, and since Phase 11 every one of them exists.
+ *
+ * This list used to carry a `phase` on the sections that had not been built, drawn greyed out
+ * with the phase that would bring them — the shape of the finished product, visible from the
+ * first screen. The last of them (Knowledge Base, Models, Evaluation) landed in Phases 9, 8 and
+ * 11, so the mechanism went with them rather than staying as a branch nothing takes.
  */
 const navigation = [
   { to: '/', label: 'Dashboard', end: true },
@@ -15,7 +18,7 @@ const navigation = [
   { to: '/knowledge', label: 'Knowledge Base' },
   { to: '/mcp', label: 'MCP Tools' },
   { to: '/models', label: 'Models' },
-  { to: '/evaluation', label: 'Evaluation', phase: 11 },
+  { to: '/evaluation', label: 'Evaluation' },
 ];
 
 export function Layout() {
@@ -36,34 +39,22 @@ export function Layout() {
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3">
-          {navigation.map((item) =>
-            item.phase ? (
-              <div
-                key={item.to}
-                className="flex cursor-not-allowed items-center justify-between rounded-md
-                           px-3 py-2 text-sm text-slate-600"
-                title={`Arrives in Phase ${item.phase}`}
-              >
-                {item.label}
-                <span className="text-[10px] font-medium text-slate-700">P{item.phase}</span>
-              </div>
-            ) : (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) =>
-                  `block rounded-md px-3 py-2 text-sm transition-colors ${
-                    isActive
-                      ? 'bg-accent/10 font-medium text-accent'
-                      : 'text-slate-400 hover:bg-ink-800 hover:text-slate-200'
-                  }`
-                }
-              >
-                {item.label}
-              </NavLink>
-            ),
-          )}
+          {navigation.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `block rounded-md px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? 'bg-accent/10 font-medium text-accent'
+                    : 'text-slate-400 hover:bg-ink-800 hover:text-slate-200'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
 
         <div className="border-t border-ink-800 p-3">

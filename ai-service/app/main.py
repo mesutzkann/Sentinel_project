@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.api import actions as actions_api
+from app.api import evaluations as evaluations_api
 from app.api import investigations as investigations_api
 from app.api import llm as llm_api
 from app.api import mcp as mcp_api
@@ -57,6 +58,7 @@ app.include_router(rag_api.router)
 app.include_router(investigations_api.router)
 app.include_router(models_api.router)
 app.include_router(actions_api.router)
+app.include_router(evaluations_api.router)
 
 
 class Health(BaseModel):
