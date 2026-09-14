@@ -57,6 +57,11 @@ IMPROVEMENT_SHARE = 0.5
 
 ERROR_RATE_TOOL = "metrics-mcp/get_error_rate"
 
+#: The second signal, and the one that catches what a rate cannot. An error rate is a fraction of
+#: the requests that arrived: a service answering nothing at all has an error rate of zero, which
+#: reads as perfect health. A real request tells the two apart.
+SMOKE_TOOL = "testing-mcp/run_smoke_check"
+
 
 class Verdict(StrEnum):
     """What the measurement says about the fix."""
@@ -79,6 +84,11 @@ class Verification:
     error_rate_after: float | None = None
     settled_seconds: int = 0
     window_minutes: int = VERIFY_WINDOW_MINUTES
+
+    #: Whether the service answered real requests afterwards. None when testing-mcp is not
+    #: reachable — unknown, like every other measurement that could not be taken.
+    smoke_passed: bool | None = None
+    smoke_summary: str | None = None
 
     @property
     def confirmed(self) -> bool:
@@ -210,6 +220,7 @@ class Remediator:
             await asyncio.sleep(self._settle)
 
         after = await self._error_rate(service)
+        smoke = await self._smoke(service)
 
         if before is None or after is None:
             return Verification(
@@ -224,9 +235,21 @@ class Remediator:
                 error_rate_after=after,
                 settled_seconds=self._settle,
                 window_minutes=self._window,
+                smoke_passed=smoke[0],
+                smoke_summary=smoke[1],
             )
 
         verdict, summary = _judge(before, after)
+
+        if smoke[0] is False:
+            # A rate that improved while the service answers nothing is the trap this second
+            # signal exists for: no requests means no failed requests. Whatever the numbers say,
+            # a service that will not serve has not been fixed.
+            verdict = Verdict.UNCHANGED if verdict is not Verdict.WORSE else Verdict.WORSE
+            summary = (
+                f"{summary} But the service is not answering requests: {smoke[1]} "
+                "Whatever the rate says, this is not fixed."
+            )
 
         return Verification(
             verdict,
@@ -236,7 +259,26 @@ class Remediator:
             error_rate_after=after,
             settled_seconds=self._settle,
             window_minutes=self._window,
+            smoke_passed=smoke[0],
+            smoke_summary=smoke[1],
         )
+
+    async def _smoke(self, service: str) -> tuple[bool | None, str | None]:
+        """Does it actually serve? None when the check could not be made at all."""
+        call = await self._client.call(SMOKE_TOOL, {"service": service})
+
+        if not call.success:
+            logger.info("No smoke check for %s: %s", service, call.error)
+
+            return None, None
+
+        content = _as_dict(call.content)
+        passed = content.get("passed")
+
+        if not isinstance(passed, bool):
+            return None, None
+
+        return passed, content.get("note")
 
     async def _error_rate(self, service: str | None) -> float | None:
         """The service's error rate as a fraction, or None when it cannot be read."""

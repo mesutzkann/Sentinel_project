@@ -416,6 +416,19 @@ services:
     ports:
       - "127.0.0.1:${DOCKER_MCP_PORT:-7007}:7007"
 
+  # The only server that generates traffic rather than reading what traffic left behind: it
+  # makes real requests through the estate to find out whether a fix worked. Its workflow check
+  # writes an order row and is approval-gated for exactly that reason.
+  testing-mcp:
+    <<: *mcp-common
+    container_name: sentinel-testing-mcp
+    command: ["python", "-m", "testing_mcp.server"]
+    environment:
+      <<: *mcp-env
+      PORT: "7008"
+    ports:
+      - "127.0.0.1:${TESTING_MCP_PORT:-7008}:7008"
+
 volumes:
   postgres-data:
     name: sentinel-postgres-data

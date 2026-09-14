@@ -1,5 +1,5 @@
-# One image, seven servers. The entrypoint picks which one, because the servers differ only in
-# which tools they register — seven near-identical images would be seven things to keep in step.
+# One image, eight servers. The entrypoint picks which one, because the servers differ only in
+# which tools they register — eight near-identical images would be eight things to keep in step.
 FROM python:3.11-slim AS runtime
 
 # git-mcp shells out to git through GitPython, so the binary has to be present. Nothing else is
@@ -30,6 +30,7 @@ COPY database_mcp/ database_mcp/
 COPY git_mcp/ git_mcp/
 COPY source_code_mcp/ source_code_mcp/
 COPY docker_mcp/ docker_mcp/
+COPY testing_mcp/ testing_mcp/
 
 # The repository is mounted here read-only for git-mcp and source-code-mcp. Declared so the
 # mount point exists even when nothing is mounted, and git does not refuse a directory owned by

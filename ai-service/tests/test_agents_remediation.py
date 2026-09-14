@@ -16,6 +16,7 @@ import pytest
 from agents.remediation import (
     ERROR_RATE_TOOL,
     HEALTHY_ERROR_RATE,
+    SMOKE_TOOL,
     Remediator,
     Verdict,
 )
@@ -28,13 +29,49 @@ ARGUMENTS = {"name": "sentinel-orders"}
 class FakeClient:
     """Answers tool calls from a script and records what it was asked, in order."""
 
-    def __init__(self, rates: list[float | None], *, action: ToolCallResult | None = None) -> None:
+    def __init__(
+        self,
+        rates: list[float | None],
+        *,
+        action: ToolCallResult | None = None,
+        smoke: bool | None = True,
+    ) -> None:
         self._rates = list(rates)
         self._action = action
+        self._smoke = smoke
         self.calls: list[tuple[str, dict[str, Any], str | None]] = []
 
     async def call(self, tool: str, arguments=None, approval_token=None):  # noqa: ANN001, ANN201
         self.calls.append((tool, dict(arguments or {}), approval_token))
+
+        if tool == SMOKE_TOOL:
+            if self._smoke is None:
+                return ToolCallResult(
+                    tool="run_smoke_check",
+                    server="testing-mcp",
+                    arguments=arguments or {},
+                    success=False,
+                    latency_ms=3,
+                    error="testing-mcp is unreachable.",
+                )
+
+            return ToolCallResult(
+                tool="run_smoke_check",
+                server="testing-mcp",
+                arguments=arguments or {},
+                success=True,
+                latency_ms=120,
+                content=json.dumps(
+                    {
+                        "passed": self._smoke,
+                        "note": (
+                            "Health and requests both pass."
+                            if self._smoke
+                            else "The service reports healthy and answers no requests."
+                        ),
+                    }
+                ),
+            )
 
         if tool == ERROR_RATE_TOOL:
             rate = self._rates.pop(0) if self._rates else None
@@ -106,9 +143,15 @@ async def test_the_symptom_is_measured_before_and_after() -> None:
     assert execution.verification.error_rate_after == 0.002
     assert execution.confirmed
 
-    # Before, action, after — in that order, and the action carries the approval.
-    assert [call[0] for call in client.calls] == [ERROR_RATE_TOOL, RESTART, ERROR_RATE_TOOL]
+    # Before, action, after, and a real request — in that order, with the approval on the action.
+    assert [call[0] for call in client.calls] == [
+        ERROR_RATE_TOOL,
+        RESTART,
+        ERROR_RATE_TOOL,
+        SMOKE_TOOL,
+    ]
     assert client.calls[1][2] == "a-token"
+    assert execution.verification.smoke_passed is True
 
 
 @pytest.mark.asyncio
@@ -263,3 +306,30 @@ async def test_a_symptom_at_the_healthy_threshold_is_still_not_a_baseline() -> N
     remediation, _ = remediator([HEALTHY_ERROR_RATE, 0.0])
 
     assert (await run(remediation)).verification.verdict is Verdict.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_a_service_that_answers_nothing_is_not_fixed_however_good_the_rate_looks() -> None:
+    """The hole a rate alone cannot cover: no requests means no failed requests.
+
+    An error rate is a fraction of the requests that arrived. A service answering nothing has a
+    rate of zero, which reads as perfect health — so a real request is what tells "fixed" from
+    "silent", and it overrides the number.
+    """
+    remediation, _ = remediator([0.40, 0.0], smoke=False)
+    execution = await run(remediation)
+
+    assert execution.verification.error_rate_after == 0.0
+    assert execution.verification.verdict is Verdict.UNCHANGED
+    assert execution.confirmed is False
+    assert "not answering requests" in execution.verification.summary
+
+
+@pytest.mark.asyncio
+async def test_a_smoke_check_that_cannot_run_leaves_the_rate_to_speak() -> None:
+    """testing-mcp being absent must not turn a measured improvement into a failure."""
+    remediation, _ = remediator([0.40, 0.001], smoke=None)
+    execution = await run(remediation)
+
+    assert execution.verification.verdict is Verdict.RESOLVED
+    assert execution.verification.smoke_passed is None

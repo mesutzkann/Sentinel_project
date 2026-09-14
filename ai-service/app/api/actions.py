@@ -94,6 +94,8 @@ class VerificationResponse(BaseModel):
     error_rate_after: float | None = None
     settled_seconds: int = 0
     window_minutes: int = VERIFY_WINDOW_MINUTES
+    smoke_passed: bool | None = None
+    smoke_summary: str | None = None
 
 
 class ExecuteResponse(BaseModel):

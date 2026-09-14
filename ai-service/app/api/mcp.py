@@ -37,6 +37,7 @@ def server_configs(config: Settings) -> list[McpServerConfig]:
         McpServerConfig("git-mcp", config.git_mcp_url),
         McpServerConfig("source-code-mcp", config.source_code_mcp_url),
         McpServerConfig("docker-mcp", config.docker_mcp_url),
+        McpServerConfig("testing-mcp", config.testing_mcp_url),
     ]
 
 

@@ -170,6 +170,10 @@ class Settings(BaseSettings):
     # container.
     docker_mcp_url: str = "http://localhost:7007/mcp"
 
+    # The only server that generates traffic: it makes real requests to find out whether a fix
+    # worked, which is the second verification signal beside the error rate.
+    testing_mcp_url: str = "http://localhost:7008/mcp"
+
     # Origins allowed to call this service from a browser. The Vite dev server by default.
     cors_origins: str = "http://localhost:5173"
 
