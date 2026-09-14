@@ -63,6 +63,27 @@ class Settings(BaseSettings):
     # Attempts, not retries. Constrained decoding usually makes the first one enough.
     llm_max_attempts: int = 3
 
+    # ---- Router ----
+    # The QLoRA-tuned 1.5B from Phase 8. On the test split it routes 0.871 of questions to the
+    # right intent against the keyword table's 0.354, so it goes in front — but the table stays
+    # behind it, and `ModelRouter` falls back to it whenever the model is unparseable or absent.
+    # A machine that has never run `ollama create sentinel-router` therefore keeps working, with
+    # the routing accuracy it had before this phase.
+    router_model: str = "sentinel-router"
+
+    # The one-line prompt the model was trained on. v1 carries the whole intent table, which a
+    # tuned model does not need and pays prefill for.
+    router_prompt_version: str = "v2"
+
+    # Its own timeout, an order of magnitude under the reasoning model's. p95 is 2.3 s on a 6 GB
+    # card; anything approaching this cap means the model is not loaded or not on the GPU, and
+    # waiting two minutes for a route is worse than the keyword table answering now.
+    router_timeout_seconds: float = 20.0
+
+    # The escape hatch: routes by keyword table alone. For a machine without the tuned model, and
+    # for measuring what the agent is like without it.
+    router_use_model: bool = True
+
     # ---- PostgreSQL ----
     # The same instance and the same credentials the backend and the samples use; this service
     # owns the `rag` schema inside it. Defaults are the compose values, so a natively run

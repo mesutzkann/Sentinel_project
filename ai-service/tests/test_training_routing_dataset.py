@@ -194,7 +194,9 @@ def test_a_resumed_paraphrase_run_does_not_ask_twice(tmp_path, examples) -> None
     """The cache is keyed by seed and model, and records the seeds that yielded nothing."""
     cache = tmp_path / "paraphrases.jsonl"
     seed = examples[0]
-    rewrite = Example(**{**asdict(seed), "query": "something else entirely", "source": "paraphrase"})
+    rewrite = Example(
+        **{**asdict(seed), "query": "something else entirely", "source": "paraphrase"}
+    )
 
     append_paraphrase_cache(cache, "qwen2.5:3b-instruct", seed, [rewrite])
     append_paraphrase_cache(cache, "qwen2.5:3b-instruct", examples[1], [])

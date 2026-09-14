@@ -47,7 +47,7 @@ from mcp_client.client import McpClient
 from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpToolRegistry
 from rag.retrievers import Retriever
-from routing.rule_router import RuleBasedRouter
+from routing.factory import build_router
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class InvestigationService:
             model=config.llm_model,
             timeout_seconds=config.llm_timeout_seconds,
         )
-        self._router = RuleBasedRouter()
+        self._router = build_router(config)
 
     def get(self, investigation_id: str) -> RunRecord | None:
         return self._runs.get(investigation_id)

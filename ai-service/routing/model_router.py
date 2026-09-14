@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 
-from llm.base import LlmMessage, LlmOptions, LocalLlmProvider
+from llm.base import LlmError, LlmMessage, LlmOptions, LocalLlmProvider
 from llm.prompts import PromptRegistry, registry
 from llm.structured import (
     StructuredOutputError,
@@ -78,8 +78,12 @@ class ModelRouter(Router):
         self._prompts = prompts or registry()
 
         # Counted rather than logged, because the share of answers that would not parse is one of
-        # the numbers this phase exists to report.
+        # the numbers this phase exists to report. `unavailable` is counted apart from it on
+        # purpose: a dead Ollama is not the model failing to produce the schema, and folding the
+        # two together would let an infrastructure problem inflate — or flatter — the number the
+        # benchmark publishes.
         self.invalid_json = 0
+        self.unavailable = 0
         self.calls = 0
 
     @property
@@ -118,6 +122,16 @@ class ModelRouter(Router):
         except ValueError:
             # Unconstrained decoding that came back as something other than the object asked for.
             self.invalid_json += 1
+
+            return await self._fall_back(query, service_hint)
+        except LlmError as exc:
+            # Ollama is down, or the router model is not pulled on this machine. This is the case
+            # that decides whether shipping a model router makes the agent worse: without it, a
+            # machine that has not run `ollama create sentinel-router` fails every investigation
+            # at the first node, where before Phase 8 it would have routed by keyword and carried
+            # on. The keyword table is the floor, and the floor stays.
+            self.unavailable += 1
+            logger.warning("%s is unavailable (%s); falling back", self._name, exc)
 
             return await self._fall_back(query, service_hint)
 
@@ -163,8 +177,10 @@ class ModelRouter(Router):
         """Answer badly rather than fail the run.
 
         This is the third job `routing/rule_router.py` was written for. A 1.5B that returns
-        something unparseable leaves the investigation with no plan at all, and a keyword table's
-        guess is worth more than that.
+        something unparseable — or a model that is not on this machine at all — leaves the
+        investigation with no plan, and a keyword table's guess is worth more than that. It
+        scores 0.354 against the tuned model's 0.871, which is the size of the degradation this
+        buys with.
         """
         if self._fallback is None:
             raise RouterError(f"{self._name} produced no usable route and has no fallback")
