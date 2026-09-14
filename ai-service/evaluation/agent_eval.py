@@ -41,11 +41,12 @@ Reproduction is throughput *or* failures, because not every fault fails requests
 missing-index scenario serves everything and serves it five times slower, which is a broken
 service by any definition a person would use.
 
-**Two of the five scenarios need load this file does not yet drive.** `DB_DEADLOCK` wants
-concurrent writes to payments and `NULL_REFERENCE_EXCEPTION` wants one particular currency; a
-generic read against the owning service's list endpoint leaves both untouched, and they come back
-as "did not reproduce" rather than as a failure of the agent. Per-scenario load recipes are the
-fix and they are not written yet.
+**A fault is on a path, not on a service.** Three of the five scenarios sit behind endpoints a
+generic read never touches, so each has a recipe read out of the service's own code: the deadlock
+contends for balances before a payment is written, the n+1 lives on the order *detail* route, and
+the null reference needs a currency outside `{TRY, USD, EUR}`. Driving the owning service's list
+endpoint reported all three as faults that did not reproduce — which was true, and was a fact
+about the load rather than about the agent. See :data:`LOAD_RECIPES`.
 
 It needs the whole stack: the sample services, the observability backends, the MCP servers,
 PostgreSQL with the corpus ingested, and Ollama. That is not an accident of the design; a
@@ -77,6 +78,10 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = _REPO_ROOT / "datasets" / "evaluation" / "reasoning"
 
+#: A seeded user, for the one recipe that has to create something. From the users service's own
+#: seed data.
+DEMO_USER = "33333333-3333-3333-3333-333333333333"
+
 #: Which service owns which scenario, from `sample-services/chaos/scenarios.md`. The chaos API is
 #: per service and a scenario enabled on the wrong one is a 404, so this table is the difference
 #: between a benchmark and five confusing failures.
@@ -88,7 +93,7 @@ SCENARIO_PORTS: dict[str, int] = {
     "notifications": 8084,
 }
 
-#: What to hammer for each owning service. **The load has to hit the path the scenario
+#: The owning service's own list endpoint. **The load has to hit the path the scenario
 #: instruments**, not merely the service that owns it: the pool scenario makes `GET /orders` hold
 #: a connection, so driving checkouts through the gateway warms orders without exhausting
 #: anything. A first version of this file drove 6413 checkouts at 150 concurrent and failed none
@@ -100,6 +105,96 @@ LOAD_TARGETS: dict[str, str] = {
     "payments": "http://localhost:8083/payments?limit=50",
     "notifications": "http://localhost:8084/notifications?limit=50",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class LoadRecipe:
+    """How to make one scenario actually happen.
+
+    **A fault is on a path, not on a service.** Three of the five scenarios sit behind endpoints
+    a generic read never touches, and driving the owning service's list endpoint reported all
+    three as faults that did not reproduce — which was true, and was a fact about the load rather
+    than about the agent.
+    """
+
+    url: str
+    method: str = "GET"
+    body: dict[str, Any] | None = None
+
+    #: Bodies cycled one per request, for a fault whose signature is a *subset* of traffic
+    #: failing. Sending the bad request every time reproduces the fault and changes what it looks
+    #: like: the null-reference scenario failed 8636 of 8636 requests, which is not "fast failures
+    #: on a subset" — it is a total outage, and the agent reasonably concluded a stuck circuit
+    #: breaker. A benchmark that deforms the fault measures the deformation.
+    body_variants: tuple[dict[str, Any], ...] = ()
+
+    #: Whether the recipe needs an order that exists — for the detail route, and for the two that
+    #: authorise a payment against one.
+    needs_order: bool = False
+
+    #: Concurrency for this recipe, where the default hides the fault. **Saturation masks a
+    #: latency signature**: at 150 concurrent, per-request latency is dominated by queueing, and
+    #: the n+1's forty-queries-instead-of-one showed as 1948ms against 1531ms — a 1.27x that is
+    #: mostly queue. The load level that exposes a pool exhaustion is the one that hides this.
+    concurrency: int = 0
+
+    #: How many line items the order it acts on needs. The n+1 scenario turns one query into one
+    #: per item, so on a one-item order it is one query against one: 9523 requests went through
+    #: at 127/s against a 93/s baseline and the fault "did not reproduce". It reproduces on an
+    #: order with a basket.
+    order_items: int = 1
+
+
+#: Per scenario, where the default is not enough. Each was read out of the service's own code
+#: rather than guessed: `payments/Program.cs` contends for balances before writing a payment,
+#: `orders/Program.cs` drops the `Include` on `GET /orders/{id}`, and `PaymentProcessor.cs`
+#: throws for any currency outside `{TRY, USD, EUR}`.
+LOAD_RECIPES: dict[str, LoadRecipe] = {
+    "DB_DEADLOCK": LoadRecipe(
+        "http://localhost:8083/payments/authorize",
+        method="POST",
+        # Two transactions taking the same two rows in opposite order. The contention runs before
+        # the write, so concurrent authorises are what produce it.
+        body={"order_id": None, "amount": 12.5, "currency": "TRY"},
+        needs_order=True,
+    ),
+    "NULL_REFERENCE_EXCEPTION": LoadRecipe(
+        "http://localhost:8083/payments/authorize",
+        method="POST",
+        # One request in three in a currency the map does not carry. With the scenario off that is
+        # a handled warning and a declined payment; with it on, the null guard is skipped and the
+        # dereference throws. **The mix is the point**: the scenario's discriminator is fast
+        # failures on a *subset* with latency unaffected, and a load that sent XYZ every time
+        # failed 100% of requests — a total outage, which the agent read as a stuck circuit
+        # breaker, reasonably.
+        body_variants=(
+            {"order_id": None, "amount": 12.5, "currency": "XYZ"},
+            {"order_id": None, "amount": 12.5, "currency": "TRY"},
+            {"order_id": None, "amount": 12.5, "currency": "USD"},
+        ),
+        needs_order=True,
+    ),
+    "DB_N_PLUS_ONE_QUERY": LoadRecipe(
+        # The detail route, not the list: the `Include` that gets dropped is on this one, and it
+        # needs an order with a basket — one query per line item is one query on a one-item order.
+        "http://localhost:8082/orders/{order_id}",
+        needs_order=True,
+        # Two hundred, and the number is measured. At forty items the detail route went from
+        # 33ms to 46ms — a 1.37x that is a real signal and sits under the 1.5x threshold, and the
+        # honest fix is a louder fault rather than a looser detector: at two hundred the same
+        # query-per-item turns into two hundred round trips where there was one.
+        order_items=200,
+        # Deliberately light. This fault is measured in latency and latency under saturation is
+        # queueing; eight concurrent requests leave the service free to answer, so the round
+        # trips are what the clock sees. At 150 concurrent the same fault read 1.27x, mostly
+        # queue.
+        concurrency=8,
+    ),
+}
+
+#: A seeded user, for the one recipe that has to create something. From the users service's own
+#: seed data.
+DEMO_USER = "33333333-3333-3333-3333-333333333333"
 
 #: Seconds of traffic before and after the fault is introduced. The "before" matters as much as
 #: the "after" — a metric with no healthy baseline in its window reads as a service that was
@@ -118,6 +213,12 @@ SETTLE_SECONDS = 20
 #: throughput, zero errors, and a service that is plainly broken. A reproduction check that only
 #: counted failures called that "did not reproduce" and skipped the case.
 COLLAPSE_SHARE = 0.6
+
+#: Above this multiple of the baseline's per-request latency, the fault counts as reproduced even
+#: when nothing failed and throughput held. The n+1 scenario's own documentation says "latency
+#: rises moderately, DB CPU rises sharply relative to request rate" — a fault whose signature is
+#: query count rather than failure, and the only one of the three instruments that can see it.
+SLOWDOWN_FACTOR = 1.5
 
 #: Concurrent requests while driving load. **Measured, and the number this benchmark lives or
 #: dies on** — `scripts/demo.py` drove orders at 60, 120 and 200 concurrent for twenty seconds
@@ -174,7 +275,7 @@ class CaseOutcome:
     duration_s: float = 0.0
     failure_reason: str | None = None
     error: str | None = None
-    load: dict[str, int] = field(default_factory=dict)
+    load: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,40 +349,146 @@ async def chaos(client: httpx.AsyncClient, service: str, path: str) -> None:
         )
 
 
-async def drive(client: httpx.AsyncClient, seconds: int, service: str) -> tuple[int, int]:
-    """Hold `CONCURRENCY` requests against the scenario's own service. Returns (served, failed).
+async def recipe_for(client: httpx.AsyncClient, case: AgentCase) -> LoadRecipe:
+    """The scenario's recipe, with anything it needs looked up first."""
+    recipe = LOAD_RECIPES.get(case.scenario)
 
-    Against the endpoint the fault lives on, not through the gateway: see `LOAD_TARGETS`. A 5xx
-    counts as failed and so does a timeout — from the outside, a request that never answered and
-    one that answered 500 are the same incident.
+    if recipe is None:
+        target = LOAD_TARGETS.get(case.service)
+
+        if target is None:
+            raise AgentEvalError(f"No load target known for '{case.service}'.")
+
+        return LoadRecipe(target)
+
+    if not recipe.needs_order:
+        return recipe
+
+    order_id = await an_order(client, recipe.order_items)
+
+    return LoadRecipe(
+        url=recipe.url.replace("{order_id}", order_id),
+        method=recipe.method,
+        body=({**recipe.body, "order_id": order_id} if recipe.body else None),
+        body_variants=tuple(
+            {**variant, "order_id": order_id} for variant in recipe.body_variants
+        ),
+        concurrency=recipe.concurrency,
+        order_items=recipe.order_items,
+    )
+
+
+async def an_order(client: httpx.AsyncClient, items: int = 1) -> str:
+    """An order to act on, with at least `items` line items.
+
+    One item is read rather than created: the estate is seeded and driven by everything else, so
+    there is always an order, and a write here would land on a service some scenarios are about
+    to break. A basket is created, through the gateway, because none of the traffic this project
+    drives produces one and the n+1 scenario is invisible without it. It happens during the
+    baseline, before any fault is enabled.
     """
-    target = LOAD_TARGETS.get(service)
+    if items <= 1:
+        response = await client.get(
+            LOAD_TARGETS["orders"].replace("limit=50", "limit=1"), timeout=30
+        )
+        response.raise_for_status()
+        orders = response.json()
 
-    if target is None:
-        raise AgentEvalError(f"No load target known for '{service}'.")
+        if not orders:
+            raise AgentEvalError(
+                "No orders exist, so the recipes that act on one cannot run. Drive some traffic "
+                "through the gateway first."
+            )
 
+        return orders[0]["id"]
+
+    created = await client.post(
+        "http://localhost:8080/api/checkout",
+        json={
+            "user_id": DEMO_USER,
+            "items": [
+                {"product_name": f"bench-{index}", "quantity": 1, "unit_price": 1.0 + index}
+                for index in range(items)
+            ],
+            "currency": "TRY",
+        },
+        timeout=60,
+    )
+
+    if not created.is_success:
+        raise AgentEvalError(
+            f"Could not create an order with {items} items: "
+            f"{created.status_code} {created.text[:200]}"
+        )
+
+    return created.json()["id"]
+
+
+async def drive(
+    client: httpx.AsyncClient,
+    seconds: int,
+    recipe: LoadRecipe,
+) -> tuple[int, int, float]:
+    """Hold `CONCURRENCY` requests against the path the fault lives on.
+
+    Returns (served, failed, mean latency in ms). A 5xx counts as failed and so does a timeout —
+    from the outside, a request that never answered and one that answered 500 are the same
+    incident.
+
+    **Latency is measured because throughput cannot see every fault.** The n+1 scenario turns one
+    query into forty and the documentation says so plainly: "latency rises moderately, DB CPU
+    rises sharply relative to request rate". Under concurrency that cost 15% of throughput — 89/s
+    against 104/s — which is inside the noise between two baseline runs. Per request it is
+    visible.
+    """
     deadline = time.perf_counter() + seconds
     served = 0
     failed = 0
+    sent = 0
+    elapsed = 0.0
+
+    def body() -> dict[str, Any] | None:
+        """One body per request, cycling the variants so a subset carries the bad one."""
+        nonlocal sent
+
+        if not recipe.body_variants:
+            return recipe.body
+
+        chosen = recipe.body_variants[sent % len(recipe.body_variants)]
+        sent += 1
+
+        return chosen
 
     async def one() -> None:
-        nonlocal served, failed
+        nonlocal served, failed, elapsed
 
         while time.perf_counter() < deadline:
+            started = time.perf_counter()
+
             try:
-                response = await client.get(target, timeout=30)
+                if recipe.method == "POST":
+                    response = await client.post(recipe.url, json=body(), timeout=30)
+                else:
+                    response = await client.get(recipe.url, timeout=30)
+
                 ok = response.status_code < 500
             except httpx.HTTPError:
                 ok = False
+
+            # Timed whether it succeeded or not: a request that failed after waiting five
+            # seconds is a slow failure, and averaging only the successes would hide it.
+            elapsed += time.perf_counter() - started
 
             if ok:
                 served += 1
             else:
                 failed += 1
 
-    await asyncio.gather(*(one() for _ in range(CONCURRENCY)))
+    await asyncio.gather(*(one() for _ in range(recipe.concurrency or CONCURRENCY)))
 
-    return served, failed
+    total = served + failed
+
+    return served, failed, round(elapsed * 1000 / total, 1) if total else 0.0
 
 
 # ------------------------------------------------------------------------- one case ----
@@ -310,16 +517,19 @@ async def run_case(
             if not skip_load:
                 print(f"  {case.id}: healthy traffic", file=sys.stderr)
                 await chaos(client, case.service, "reset")
-                served, failed = await drive(client, BASELINE_SECONDS, case.service)
+                recipe = await recipe_for(client, case)
+                served, failed, latency = await drive(client, BASELINE_SECONDS, recipe)
                 outcome.load["baseline_served"] = served
                 outcome.load["baseline_failed"] = failed
+                outcome.load["baseline_latency_ms"] = latency
 
                 print(f"  {case.id}: enabling {case.scenario}", file=sys.stderr)
                 await chaos(client, case.service, f"{case.scenario}/enable")
 
-                served, failed = await drive(client, CHAOS_SECONDS, case.service)
+                served, failed, latency = await drive(client, CHAOS_SECONDS, recipe)
                 outcome.load["chaos_served"] = served
                 outcome.load["chaos_failed"] = failed
+                outcome.load["chaos_latency_ms"] = latency
 
                 baseline_rate = outcome.load["baseline_served"] / max(BASELINE_SECONDS, 1)
                 chaos_rate = served / max(CHAOS_SECONDS, 1)
@@ -327,16 +537,28 @@ async def run_case(
                 outcome.load["baseline_per_second"] = round(baseline_rate)
                 outcome.load["chaos_per_second"] = round(chaos_rate)
 
-                if failed == 0 and not collapsed:
+                # Three instruments, because the faults are not alike: requests that fail,
+                # throughput that collapses, and requests that got slower. The n+1 scenario shows
+                # in the third alone — forty queries instead of one cost 15% of throughput under
+                # concurrency, which is inside the noise between two baseline runs, and showed up
+                # per request.
+                baseline_latency = outcome.load["baseline_latency_ms"]
+                slower = baseline_latency > 0 and latency > baseline_latency * SLOWDOWN_FACTOR
+                outcome.load["latency_ratio"] = (
+                    round(latency / baseline_latency, 2) if baseline_latency else 0
+                )
+
+                if failed == 0 and not collapsed and not slower:
                     # The fault was enabled and nothing broke, so there is no incident to
                     # investigate. Scoring the agent here would mark it wrong for not finding
                     # something that did not happen — the same mistake as calling a healthy
                     # service "fixed" after a restart. Recorded as not run, with the reason.
                     outcome.error = (
                         f"{case.scenario} was enabled and {served} requests all succeeded at "
-                        f"{chaos_rate:.0f}/s against a baseline of {baseline_rate:.0f}/s, so the "
-                        "fault did not reproduce on this path. Either the load has to reach the "
-                        "endpoint the fault lives on, or this scenario needs its own recipe."
+                        f"{chaos_rate:.0f}/s against a baseline of {baseline_rate:.0f}/s, at "
+                        f"{latency:.0f}ms against {baseline_latency:.0f}ms, so the fault did not "
+                        "reproduce on this path. Either the load has to reach the endpoint the "
+                        "fault lives on, or this scenario needs its own recipe."
                     )
                     print(f"  {case.id}: the fault did not reproduce", file=sys.stderr)
                     reproduced = False

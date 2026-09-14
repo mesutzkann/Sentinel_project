@@ -12,7 +12,15 @@ import json
 
 import pytest
 
-from evaluation.agent_eval import AgentEvalError, CaseOutcome, _coverage, load_cases, report, score
+from evaluation.agent_eval import (
+    SCENARIO_PORTS,
+    AgentEvalError,
+    CaseOutcome,
+    _coverage,
+    load_cases,
+    report,
+    score,
+)
 
 
 def outcome(**overrides) -> CaseOutcome:
@@ -150,8 +158,8 @@ async def test_a_fault_that_did_not_reproduce_is_not_scored_as_a_wrong_answer(mo
     from evaluation import agent_eval
 
     # The same rate in both windows: the service kept serving exactly as it had been.
-    async def healthy(client, seconds, service):  # noqa: ANN001, ANN202
-        return 100 * seconds, 0
+    async def healthy(client, seconds, recipe):  # noqa: ANN001, ANN202
+        return 100 * seconds, 0, 10.0
 
     async def nothing(client, service, path):  # noqa: ANN001, ANN202
         return None
@@ -183,17 +191,85 @@ def test_the_load_is_the_measured_one() -> None:
     assert CHAOS_SECONDS >= 60
 
 
-def test_every_case_has_a_load_target_on_its_own_service() -> None:
-    """The load has to hit the path the fault lives on.
+def test_every_case_has_load_that_reaches_its_fault() -> None:
+    """The load has to hit the path the fault lives on, not merely the service that owns it.
 
-    Driving the gateway's checkout instead put 6413 requests through a healthy path and failed
-    none of them while the pool scenario was enabled on orders.
+    Driving the gateway's checkout put 6413 requests through a healthy path and failed none of
+    them while the pool scenario was enabled on orders; driving the *list* endpoint then left
+    the deadlock, the n+1 and the null reference untouched, because all three are behind other
+    routes.
     """
-    from evaluation.agent_eval import LOAD_TARGETS
+    from evaluation.agent_eval import LOAD_RECIPES, LOAD_TARGETS
 
     for case in load_cases(_fixtures()):
-        assert case.service in LOAD_TARGETS
-        assert case.service in LOAD_TARGETS[case.service]
+        recipe = LOAD_RECIPES.get(case.scenario)
+
+        if recipe is None:
+            # The default: the owning service's own list endpoint.
+            assert case.service in LOAD_TARGETS
+            assert case.service in LOAD_TARGETS[case.service]
+            continue
+
+        assert str(SCENARIO_PORTS[case.service]) in recipe.url, (
+            f"{case.scenario}'s recipe has to reach {case.service}"
+        )
+
+
+def test_the_null_reference_recipe_uses_a_currency_the_service_does_not_know() -> None:
+    """The scenario throws for an unmapped currency; TRY, USD and EUR are mapped.
+
+    A recipe that paid in TRY would exercise the happy path with the fault enabled and report
+    that the fault did not reproduce.
+    """
+    from evaluation.agent_eval import LOAD_RECIPES
+
+    recipe = LOAD_RECIPES["NULL_REFERENCE_EXCEPTION"]
+    currencies = [variant["currency"] for variant in recipe.body_variants]
+
+    assert recipe.method == "POST"
+    assert any(currency not in {"TRY", "USD", "EUR"} for currency in currencies)
+
+    # And a mix, because the fault's signature is a subset failing. Sending the bad currency
+    # every time failed 8636 of 8636 requests — a total outage, which the agent read as a stuck
+    # circuit breaker, reasonably.
+    assert any(currency in {"TRY", "USD", "EUR"} for currency in currencies)
+
+
+def test_the_n_plus_one_recipe_uses_the_detail_route() -> None:
+    """The `Include` that gets dropped is on `GET /orders/{id}`; the list keeps its own query."""
+    from evaluation.agent_eval import LOAD_RECIPES
+
+    assert "{order_id}" in LOAD_RECIPES["DB_N_PLUS_ONE_QUERY"].url
+
+
+@pytest.mark.asyncio
+async def test_a_recipe_that_needs_an_order_gets_a_real_one(monkeypatch) -> None:  # noqa: ANN001
+    """The id is read rather than created: a write would land on a service about to be broken."""
+    from evaluation import agent_eval
+
+    async def an_order(client, items=1):  # noqa: ANN001, ANN202
+        assert items >= 1
+
+        return "0c4641f9-6e69-4d70-882d-f7667e4524eb"
+
+    monkeypatch.setattr(agent_eval, "an_order", an_order)
+
+    case = load_cases(_fixtures(), ["R04"])[0]
+    recipe = await agent_eval.recipe_for(object(), case)
+
+    assert recipe.url.endswith("0c4641f9-6e69-4d70-882d-f7667e4524eb")
+    assert "{order_id}" not in recipe.url
+
+    paying = await agent_eval.recipe_for(object(), load_cases(_fixtures(), ["R03"])[0])
+
+    assert paying.body["order_id"] == "0c4641f9-6e69-4d70-882d-f7667e4524eb"
+
+    # The variants carry it too, or two of three requests would authorise against nothing.
+    mixed = await agent_eval.recipe_for(object(), load_cases(_fixtures(), ["R05"])[0])
+
+    assert {variant["order_id"] for variant in mixed.body_variants} == {
+        "0c4641f9-6e69-4d70-882d-f7667e4524eb"
+    }
 
 
 @pytest.mark.asyncio
@@ -206,9 +282,13 @@ async def test_a_fault_that_slows_everything_and_fails_nothing_did_reproduce(mon
     """
     from evaluation import agent_eval
 
-    async def slow(client, seconds, service):  # noqa: ANN001, ANN202
+    async def slow(client, seconds, recipe):  # noqa: ANN001, ANN202
         # 100/s healthy, 18/s under the fault, nothing failing.
-        return (100 * seconds, 0) if seconds == agent_eval.BASELINE_SECONDS else (18 * seconds, 0)
+        return (
+            (100 * seconds, 0, 10.0)
+            if seconds == agent_eval.BASELINE_SECONDS
+            else (18 * seconds, 0, 55.0)
+        )
 
     async def nothing(client, service, path):  # noqa: ANN001, ANN202
         return None
@@ -228,3 +308,58 @@ async def test_a_fault_that_slows_everything_and_fails_nothing_did_reproduce(mon
 
     assert result.error is None
     assert asked == ["R02"], "the agent has to be asked about a service that is plainly broken"
+
+
+def test_the_n_plus_one_recipe_asks_for_an_order_with_a_basket() -> None:
+    """One query per line item is one query on a one-item order.
+
+    Measured: 9523 requests went through the detail route at 127/s against a 93/s baseline with
+    the scenario enabled, and the fault "did not reproduce" — because the order had one item.
+    """
+    from evaluation.agent_eval import LOAD_RECIPES
+
+    assert LOAD_RECIPES["DB_N_PLUS_ONE_QUERY"].order_items >= 20
+
+
+@pytest.mark.asyncio
+async def test_a_fault_that_only_slows_each_request_still_counts(monkeypatch) -> None:  # noqa: ANN001
+    """The n+1: forty queries instead of one, and throughput barely moves.
+
+    Measured at 89/s against a 104/s baseline — inside the noise between two baseline runs, and
+    plainly visible per request. Throughput and failures are the wrong instruments for a fault
+    whose signature is query count.
+    """
+    from evaluation import agent_eval
+
+    async def same_throughput_slower(client, seconds, recipe):  # noqa: ANN001, ANN202
+        return (
+            (100 * seconds, 0, 12.0)
+            if seconds == agent_eval.BASELINE_SECONDS
+            else (95 * seconds, 0, 48.0)
+        )
+
+    async def nothing(client, service, path):  # noqa: ANN001, ANN202
+        return None
+
+    asked = []
+
+    async def record(case, config, outcome):  # noqa: ANN001, ANN202
+        asked.append(case.id)
+
+    monkeypatch.setattr(agent_eval, "drive", same_throughput_slower)
+    monkeypatch.setattr(agent_eval, "chaos", nothing)
+    monkeypatch.setattr(agent_eval, "recipe_for", lambda client, case: _recipe())
+    monkeypatch.setattr(agent_eval, "investigate", record)
+
+    case = load_cases(_fixtures(), ["R04"])[0]
+    result = await agent_eval.run_case(case, object(), skip_load=False, settle=0)
+
+    assert result.error is None, result.error
+    assert asked == ["R04"]
+    assert result.load["latency_ratio"] == 4.0
+
+
+async def _recipe():  # noqa: ANN202
+    from evaluation.agent_eval import LoadRecipe
+
+    return LoadRecipe("http://localhost:8082/orders/abc")
