@@ -52,6 +52,10 @@ x-mcp-common: &mcp-common
     JAEGER_URL: http://jaeger:16686
     POSTGRES_DSN: "postgresql://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel_dev_pw}@postgres:5432/${POSTGRES_DB:-sentinel}"
     REPO_ROOT: /repo
+    # Shared with the backend that issues approvals and the AI service that verifies them first.
+    # Empty here means every destructive tool refuses every call, which is the right default.
+    APPROVAL_SECRET: "${APPROVAL_SECRET:-}"
+    CONTAINER_PREFIX: "${CONTAINER_PREFIX:-sentinel-}"
   volumes:
     # Read-only on purpose. In Phase 4 nothing writes to the repository, and the destructive
     # tools that will in Phase 10 are a deliberate, separately-mounted decision rather than
@@ -347,6 +351,70 @@ services:
       PORT: "7006"
     ports:
       - "127.0.0.1:${SOURCE_CODE_MCP_PORT:-7006}:7006"
+
+  # The Docker socket, behind a filter. This is the only container in the project that holds it,
+  # and it is not the one that makes decisions: it exposes the container endpoints over TCP on an
+  # internal network and refuses everything else — no images, no volumes, no networks, and no
+  # `exec`, which is the endpoint that turns "restart a container" into "run anything as root on
+  # the host".
+  #
+  # The alternative was mounting the socket into docker-mcp and granting it group 0, because on
+  # Docker Desktop the socket is root:root 660. That works and it hands a tool server root on the
+  # host's Docker for the sake of four endpoints.
+  docker-proxy:
+    profiles: [mcp, all]
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: sentinel-docker-proxy
+    restart: unless-stopped
+    environment:
+      # What docker-mcp needs: list, inspect, stats, logs, restart, and recreate with a new
+      # environment. POST is what makes the last two possible and is the reason the rest of this
+      # list is explicit.
+      CONTAINERS: "1"
+      POST: "1"
+      # Everything else, said out loud rather than left to the image's defaults.
+      EXEC: "0"
+      IMAGES: "0"
+      VOLUMES: "0"
+      NETWORKS: "0"
+      SERVICES: "0"
+      SWARM: "0"
+      SECRETS: "0"
+      CONFIGS: "0"
+      NODES: "0"
+      TASKS: "0"
+      PLUGINS: "0"
+      SYSTEM: "0"
+      INFO: "0"
+      AUTH: "0"
+      BUILD: "0"
+      COMMIT: "0"
+      DISTRIBUTION: "0"
+      SESSION: "0"
+      VERSION: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # No published port. Only the compose network reaches it, which is the point.
+    expose:
+      - "2375"
+    mem_limit: 64m
+
+  # The only server that can change the running system: it restarts containers and rewrites their
+  # environment, both behind an approval token that names the container — see
+  # mcp-servers/docker_mcp/server.py. It reaches Docker through the proxy above rather than
+  # through the socket, so the worst this container can do is bounded by what the proxy passes.
+  docker-mcp:
+    <<: *mcp-common
+    container_name: sentinel-docker-mcp
+    command: ["python", "-m", "docker_mcp.server"]
+    depends_on:
+      - docker-proxy
+    environment:
+      <<: *mcp-env
+      PORT: "7007"
+      DOCKER_HOST: http://docker-proxy:2375
+    ports:
+      - "127.0.0.1:${DOCKER_MCP_PORT:-7007}:7007"
 
 volumes:
   postgres-data:

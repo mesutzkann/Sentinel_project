@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 #: approved twenty minutes ago is being applied to a different incident.
 DEFAULT_TTL_SECONDS = 600
 
+#: The argument a destructive tool carries its approval in. The token travels *inside* the tool's
+#: arguments because that is the only channel MCP gives a tool call — and it is excluded from the
+#: hash the approval is bound to, because a token cannot be part of what it authorises. Both
+#: sides strip it defensively, so a caller that puts the token in `arguments` and one that passes
+#: it separately produce the same hash.
+APPROVAL_ARGUMENT = "approval_token"
+
 #: Version tag in the payload. A token issued by an older scheme must fail verification rather
 #: than be interpreted by a newer one — the failure mode of a silently reinterpreted security
 #: token is that it authorises something nobody approved.
@@ -90,7 +97,8 @@ def hash_arguments(arguments: dict[str, Any] | None) -> str:
     builds the dictionary and in whichever order. Values are serialised rather than stringified:
     `{"tail": 100}` and `{"tail": "100"}` are different calls and have to hash differently.
     """
-    canonical = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"), default=str)
+    scoped = {k: v for k, v in (arguments or {}).items() if k != APPROVAL_ARGUMENT}
+    canonical = json.dumps(scoped, sort_keys=True, separators=(",", ":"), default=str)
 
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

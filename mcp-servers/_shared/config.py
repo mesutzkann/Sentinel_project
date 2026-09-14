@@ -45,6 +45,22 @@ class Settings(BaseSettings):
     # unbounded result is a context-window failure rather than a helpful answer.
     max_results: int = 100
 
+    # ---- destructive tools ----
+    # The key approval tokens are signed with, shared with the backend that issues them and the
+    # AI service that verifies them first. Empty means this server refuses every destructive
+    # call, which is the right default for a container that can restart other containers.
+    approval_secret: str = ""
+
+    # Where docker-mcp reaches the daemon. The socket is mounted read-write into that container
+    # and nowhere else: it is the one mount in this project that can change the running system.
+    docker_host: str = "unix:///var/run/docker.sock"
+
+    # Only containers whose name starts with this may be restarted or reconfigured. The daemon
+    # socket has no notion of "this project", so the boundary is drawn here: an approval is for
+    # an action on this stack, and a tool that could restart anything on the host would be a
+    # tool whose blast radius is the machine.
+    container_prefix: str = "sentinel-"
+
     http_timeout_seconds: float = 30.0
 
 

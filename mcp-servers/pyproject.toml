@@ -30,6 +30,9 @@ traces-mcp = "traces_mcp.server:main"
 database-mcp = "database_mcp.server:main"
 git-mcp = "git_mcp.server:main"
 source-code-mcp = "source_code_mcp.server:main"
+# Phase 10. The only server given the daemon socket, and the only one that can change the
+# running system.
+docker-mcp = "docker_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -38,6 +41,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = [
     "_shared",
+    "docker_mcp",
     "logs_mcp",
     "metrics_mcp",
     "traces_mcp",

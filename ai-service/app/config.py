@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     git_mcp_url: str = "http://localhost:7005/mcp"
     source_code_mcp_url: str = "http://localhost:7006/mcp"
 
+    # Phase 10. The only server that can change the running system, and the reason the policy
+    # layer exists: its two destructive tools are refused without an approval that names the
+    # container.
+    docker_mcp_url: str = "http://localhost:7007/mcp"
+
     # Origins allowed to call this service from a browser. The Vite dev server by default.
     cors_origins: str = "http://localhost:5173"
 

@@ -12,6 +12,7 @@ from typing import Any
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from mcp_client.approval import APPROVAL_ARGUMENT
 from mcp_client.policy import McpPolicy, PolicyResult
 from mcp_client.registry import McpServerConfig, McpToolRegistry
 
@@ -72,6 +73,13 @@ class McpClient:
         tool = decision.tool
         assert tool is not None  # guaranteed by an allowed decision
         url = self._urls[tool.server]
+
+        # The approval travels to the server as an argument, because a tool call has no other
+        # channel. The server verifies it a second time against the same secret: this client is
+        # not the only thing that can reach a container on the compose network, and a destructive
+        # tool that trusts its caller has an approval boundary only as strong as the network.
+        if approval_token and not tool.read_only:
+            arguments = {**arguments, APPROVAL_ARGUMENT: approval_token}
 
         started = time.perf_counter()
 
