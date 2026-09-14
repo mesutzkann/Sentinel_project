@@ -15,7 +15,7 @@ from rag.documents import Chunk, Document, SourceType
 from rag.embeddings import EmbeddingProvider
 from rag.ingest import CorpusError, IngestionPipeline, load_corpus, parse_document
 from rag.lexical import Bm25Index
-from rag.store import StoreStats, UpsertOutcome, VectorStore, document_key
+from rag.store import StoredDocument, StoreStats, UpsertOutcome, VectorStore, document_key
 
 RUNBOOK = """---
 type: runbook
@@ -186,6 +186,31 @@ class _MemoryStore(VectorStore):
 
     async def stats(self) -> StoreStats:
         return StoreStats(len(self.documents), 0, {}, {})
+
+    async def list_documents(self, filters=None):  # noqa: ANN001, ANN201, ARG002
+        return [
+            StoredDocument(
+                document_id=key,
+                title=document.title,
+                source_type=document.source_type.value,
+                chunks=len(chunks),
+                service=document.service,
+                external_id=document.external_id,
+                path=document.path,
+            )
+            for key, (document, chunks) in self.documents.items()
+        ]
+
+    async def get_document(self, document_id: str):  # noqa: ANN201
+        found = self.documents.get(document_id)
+
+        if found is None:
+            return None
+
+        document, chunks = found
+        listed = await self.list_documents()
+
+        return next(d for d in listed if d.document_id == document_id), document.content
 
 
 def _pipeline() -> tuple[IngestionPipeline, _CountingEmbeddings, _MemoryStore]:

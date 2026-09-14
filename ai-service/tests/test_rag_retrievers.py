@@ -146,6 +146,12 @@ class _FakeStore(VectorStore):
     async def stats(self) -> StoreStats:
         return StoreStats(len(self._chunks), len(self._chunks), {}, {})
 
+    async def list_documents(self, filters=None):  # noqa: ANN001, ANN201, ARG002
+        return []
+
+    async def get_document(self, document_id: str):  # noqa: ANN201, ARG002
+        return None
+
 
 POOL = _stored("pool", "connection pool exhausted, raise MaxPoolSize back to 200")
 LEAK = _stored("leak", "working set climbs monotonically, a memory leak")

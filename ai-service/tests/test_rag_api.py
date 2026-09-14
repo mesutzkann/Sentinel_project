@@ -20,7 +20,7 @@ from rag.documents import RetrievedChunk, SourceType, StoredChunk
 from rag.embeddings import EmbeddingUnavailableError
 from rag.ingest import DocumentOutcome, IngestReport
 from rag.retrievers import RetrievalResult
-from rag.store import StoreStats
+from rag.store import StoredDocument, StoreStats
 
 CHUNK = StoredChunk(
     chunk_id="chunk-1",
@@ -66,12 +66,52 @@ class _StubRetriever:
         )
 
 
+DOCUMENTS = [
+    StoredDocument(
+        document_id="11111111-1111-1111-1111-111111111111",
+        title="INC-00001 — orders timing out after a connection pool change",
+        source_type="postmortem",
+        chunks=4,
+        service="orders",
+        external_id="INC-00001",
+        path="incidents/INC-00001-orders-pool-exhaustion.md",
+        ingested_at="2026-09-14T09:00:00+00:00",
+        metadata={"scenario": "DB_CONNECTION_POOL_EXHAUSTION"},
+    ),
+    StoredDocument(
+        document_id="22222222-2222-2222-2222-222222222222",
+        title="INC-00142 — the connection pool was reduced to 20",
+        source_type="postmortem",
+        chunks=3,
+        service="orders",
+        external_id="INC-00142",
+        path="postmortems/INC-00142-the-connection-pool.md",
+        ingested_at="2026-09-14T15:40:00+00:00",
+        # What the agent writes into a postmortem it produced itself.
+        metadata={"source": "generated", "confidence": "0.78"},
+    ),
+]
+
+
 class _StubStore:
     def __init__(self) -> None:
         self.logged: list[dict[str, Any]] = []
+        self.filters: list[dict[str, Any] | None] = []
 
     async def log_retrieval(self, **kwargs: Any) -> None:
         self.logged.append(kwargs)
+
+    async def list_documents(self, filters: dict[str, Any] | None = None) -> list[StoredDocument]:
+        self.filters.append(filters)
+
+        return list(DOCUMENTS)
+
+    async def get_document(self, document_id: str) -> tuple[StoredDocument, str] | None:
+        found = next((d for d in DOCUMENTS if d.document_id == document_id), None)
+
+        body = "## Summary\n\nThe pool was cut from 200 to 20."
+
+        return (found, body) if found else None
 
     async def stats(self) -> StoreStats:
         return StoreStats(
@@ -391,3 +431,52 @@ def test_a_search_can_return_a_prompt_ready_context(client, service) -> None:  #
 def test_context_is_off_unless_it_is_asked_for(client, service) -> None:  # noqa: ANN001
     # A caller that renders the hits itself would otherwise pay for a second copy of them.
     assert client.post("/rag/search", json={"query": "pool"}).json()["context"] is None
+
+
+# ------------------------------------------------------------- the knowledge base ----
+
+
+def test_the_knowledge_base_lists_what_is_in_it(service, client: TestClient) -> None:
+    body = client.get("/rag/documents").json()
+
+    assert body["total"] == 2
+    assert [d["external_id"] for d in body["documents"]] == ["INC-00001", "INC-00142"]
+    assert body["documents"][0]["chunks"] == 4
+
+    # Without the text: thirty documents with every chunk of each is most of a megabyte to
+    # render a table of titles.
+    assert "content" not in body["documents"][0]
+
+
+def test_a_document_the_agent_wrote_says_so(service, client: TestClient) -> None:
+    """Ten of these were written by a human and this one was not, and a reader must be able
+    to tell — the directory it came from is not visible once it is a row in a database."""
+    body = client.get("/rag/documents").json()
+
+    assert body["documents"][0]["generated"] is False
+    assert body["documents"][1]["generated"] is True
+
+
+def test_documents_can_be_narrowed_by_type_and_service(service, client: TestClient) -> None:
+    client.get(
+        "/rag/documents",
+        params={"source_type": "postmortem,incident", "for_service": "orders"},
+    )
+
+    assert service.store.filters[-1] == {
+        "source_type": ["postmortem", "incident"],
+        "service": ["orders"],
+    }
+
+
+def test_one_document_comes_back_whole(service, client: TestClient) -> None:
+    body = client.get("/rag/documents/11111111-1111-1111-1111-111111111111").json()
+
+    assert body["external_id"] == "INC-00001"
+    assert body["content"].startswith("## Summary")
+
+
+def test_a_document_that_is_not_there_is_a_404(service, client: TestClient) -> None:
+    response = client.get("/rag/documents/99999999-9999-9999-9999-999999999999")
+
+    assert response.status_code == 404

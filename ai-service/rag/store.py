@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import abc
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -46,6 +46,26 @@ class StoreStats:
     chunks: int
     documents_by_type: dict[str, int]
     documents_by_service: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredDocument:
+    """One ingested document, without its text.
+
+    What the Knowledge Base page lists. The content is not here on purpose: a listing of thirty
+    documents that carried every chunk of every one of them would be most of a megabyte to
+    render a table of titles.
+    """
+
+    document_id: str
+    title: str
+    source_type: str
+    chunks: int
+    service: str | None = None
+    external_id: str | None = None
+    path: str | None = None
+    ingested_at: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class VectorStore(abc.ABC):
@@ -84,6 +104,14 @@ class VectorStore(abc.ABC):
     @abc.abstractmethod
     async def stats(self) -> StoreStats:
         """Counts, for the ingest report and the knowledge base page."""
+
+    @abc.abstractmethod
+    async def list_documents(self, filters: dict[str, Any] | None = None) -> list[StoredDocument]:
+        """Every ingested document, newest first. Filters match `rag.documents` columns."""
+
+    @abc.abstractmethod
+    async def get_document(self, document_id: str) -> tuple[StoredDocument, str] | None:
+        """One document and its text, reassembled from its chunks in order."""
 
 
 def document_key(document: Document) -> str:
@@ -268,6 +296,71 @@ class PgVectorStore(VectorStore):
             for rank, row in enumerate(rows, start=1)
         ]
 
+    async def list_documents(self, filters: dict[str, Any] | None = None) -> list[StoredDocument]:
+        counted = (
+            select(
+                document_chunks.c.document_id.label("document_id"),
+                func.count().label("chunks"),
+            )
+            .group_by(document_chunks.c.document_id)
+            .subquery()
+        )
+
+        query = (
+            select(
+                documents.c.id,
+                documents.c.title,
+                documents.c.source_type,
+                documents.c.service,
+                documents.c.external_id,
+                documents.c.path,
+                documents.c.ingested_at,
+                documents.c.metadata,
+                func.coalesce(counted.c.chunks, 0).label("chunks"),
+            )
+            .select_from(documents.outerjoin(counted, counted.c.document_id == documents.c.id))
+            .order_by(documents.c.ingested_at.desc(), documents.c.title)
+        )
+
+        for column, expected in (filters or {}).items():
+            if expected in (None, "", []):
+                continue
+
+            candidates = expected if isinstance(expected, list) else [expected]
+            query = query.where(documents.c[column].in_(candidates))
+
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).all()
+
+        return [_to_stored_document(row) for row in rows]
+
+    async def get_document(self, document_id: str) -> tuple[StoredDocument, str] | None:
+        try:
+            identifier = UUID(document_id)
+        except ValueError:
+            # A caller asking for a document by something that is not an id is asking for a
+            # document that does not exist, which is a 404 rather than a 500.
+            return None
+
+        found = await self.list_documents()
+        summary = next((d for d in found if d.document_id == str(identifier)), None)
+
+        if summary is None:
+            return None
+
+        query = (
+            select(document_chunks.c.content)
+            .where(document_chunks.c.document_id == identifier)
+            .order_by(document_chunks.c.chunk_index)
+        )
+
+        async with self._engine.connect() as connection:
+            chunks = [row.content for row in (await connection.execute(query)).all()]
+
+        # Joined with a blank line, which is how the chunker split it: the reader gets the
+        # document back rather than a concatenation with its paragraph breaks eaten.
+        return summary, "\n\n".join(chunks)
+
     async def all_chunks(self) -> list[StoredChunk]:
         query = (
             select(*self._chunk_columns())
@@ -394,6 +487,20 @@ def metadata_condition(filters: dict[str, Any] | None) -> Any:
         conditions.append(or_(*clauses) if len(clauses) > 1 else clauses[0])
 
     return conditions[0] if len(conditions) == 1 else and_(*conditions)
+
+
+def _to_stored_document(row: Any) -> StoredDocument:
+    return StoredDocument(
+        document_id=str(row.id),
+        title=row.title,
+        source_type=row.source_type,
+        chunks=int(row.chunks),
+        service=row.service,
+        external_id=row.external_id,
+        path=row.path,
+        ingested_at=row.ingested_at.isoformat() if row.ingested_at else None,
+        metadata=dict(row.metadata or {}),
+    )
 
 
 def _to_stored_chunk(row: Any) -> StoredChunk:

@@ -32,7 +32,7 @@ from rag.retrievers import (
     Retriever,
     VectorRetriever,
 )
-from rag.store import PgVectorStore
+from rag.store import PgVectorStore, StoredDocument
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +280,30 @@ class IngestResponse(BaseModel):
     documents: list[DocumentResult]
 
 
+class DocumentSummary(BaseModel):
+    """One ingested document, without its text."""
+
+    document_id: str
+    title: str
+    source_type: str
+    chunks: int
+    service: str | None = None
+    external_id: str | None = None
+    path: str | None = None
+    ingested_at: str | None = None
+    generated: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentsResponse(BaseModel):
+    total: int
+    documents: list[DocumentSummary]
+
+
+class DocumentDetail(DocumentSummary):
+    content: str
+
+
 class StatsResponse(BaseModel):
     documents: int
     chunks: int
@@ -446,6 +470,71 @@ async def ingest(
             )
             for d in report.documents
         ],
+    )
+
+
+@router.get("/documents", response_model=DocumentsResponse)
+async def list_documents(
+    service: Annotated[RagService, Depends(get_service)],
+    source_type: str | None = None,
+    for_service: str | None = None,
+) -> DocumentsResponse:
+    """What is in the knowledge base, newest first.
+
+    Without the text. A listing of thirty documents carrying every chunk of each of them is most
+    of a megabyte to draw a table of titles, and the page fetches the one document somebody
+    actually opens.
+    """
+    filters: dict[str, Any] = {}
+
+    if source_type:
+        filters["source_type"] = source_type.split(",")
+
+    if for_service:
+        filters["service"] = for_service.split(",")
+
+    found = await service.store.list_documents(filters)
+
+    return DocumentsResponse(
+        total=len(found),
+        documents=[_document_summary(document) for document in found],
+    )
+
+
+@router.get("/documents/{document_id}", response_model=DocumentDetail)
+async def read_document(
+    document_id: str,
+    service: Annotated[RagService, Depends(get_service)],
+) -> DocumentDetail:
+    """One document, reassembled from the chunks it was split into."""
+    found = await service.store.get_document(document_id)
+
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No document {document_id} in the knowledge base.",
+        )
+
+    summary, content = found
+
+    return DocumentDetail(**_document_summary(summary).model_dump(), content=content)
+
+
+def _document_summary(document: StoredDocument) -> DocumentSummary:
+    return DocumentSummary(
+        document_id=document.document_id,
+        title=document.title,
+        source_type=document.source_type,
+        service=document.service,
+        external_id=document.external_id,
+        path=document.path,
+        chunks=document.chunks,
+        ingested_at=document.ingested_at,
+        # `source: generated` is written into a postmortem the agent produced. A reader has to be
+        # able to tell one of those from the ten a human wrote, and the directory it sits in is
+        # not visible once it is a row in a database.
+        generated=document.metadata.get("source") == "generated",
+        metadata=document.metadata,
     )
 
 
