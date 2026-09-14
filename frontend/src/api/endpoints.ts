@@ -6,6 +6,7 @@ import type {
   IncidentStatus,
   InvestigationDetailDto,
   InvestigationDto,
+  RecommendationOutcomeDto,
   LoginResponse,
   ServiceDto,
   StartInvestigationBody,
@@ -100,4 +101,26 @@ export const queryKeys = {
   auth: {
     me: ['auth', 'me'] as const,
   },
+};
+
+/**
+ * Approving a fix, or refusing it.
+ *
+ * Approving is slow and that is the design: the backend runs the tool, waits for the service to
+ * settle and re-measures the symptom before it answers, so the verdict arrives in the response
+ * rather than having to be polled for. Budget up to three minutes and tell the user why.
+ */
+export const recommendationsApi = {
+  approve: (id: string) =>
+    api
+      .post<RecommendationOutcomeDto>(`/api/recommendations/${id}/approve`, {}, {
+        // Longer than the client default, which is sized for reads.
+        timeout: 200_000,
+      })
+      .then((r) => r.data),
+
+  reject: (id: string, reason: string) =>
+    api
+      .post<RecommendationOutcomeDto>(`/api/recommendations/${id}/reject`, { reason })
+      .then((r) => r.data),
 };

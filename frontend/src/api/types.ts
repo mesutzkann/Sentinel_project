@@ -194,6 +194,18 @@ export interface RecommendationDto {
   status: RecommendationStatus;
 }
 
+/** What became of a recommendation somebody approved or refused. */
+export interface RecommendationOutcomeDto {
+  id: string;
+  status: RecommendationStatus;
+  executed: boolean;
+  /** The action ran *and* the symptom measurably improved. `executed` alone is not success. */
+  confirmed: boolean;
+  verdict: string;
+  summary: string;
+  error: string | null;
+}
+
 export interface ToolCallDto {
   id: string;
   step_id: string | null;

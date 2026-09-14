@@ -1,4 +1,5 @@
 import type { RecommendationDto, RootCauseDto } from '../../api/types';
+import { ApprovalCard } from './ApprovalCard';
 import { ConfidenceMeter, ConfidenceTerm } from './ConfidenceMeter';
 import type { ConfidenceBreakdown } from './confidence';
 
@@ -13,11 +14,15 @@ export function RootCause({
   rootCause,
   breakdown,
   recommendations,
+  onDecision,
   failureReason,
 }: {
   rootCause: RootCauseDto;
   breakdown: ConfidenceBreakdown | null;
   recommendations: RecommendationDto[];
+
+  /** Called after an approval or a rejection, so the page can refetch what changed. */
+  onDecision?: () => void;
   failureReason: string | null;
 }) {
   const verdict = rootCause.validator_output;
@@ -152,27 +157,11 @@ export function RootCause({
         ) : (
           <ul className="mt-2 space-y-2">
             {recommendations.map((recommendation) => (
-              <li key={recommendation.id} className="rounded border border-ink-800 bg-ink-850 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="identifier text-slate-200">{recommendation.action_code}</span>
-                  {recommendation.requires_approval && (
-                    <span
-                      className="rounded border border-state-warn/30 bg-state-warn/10 px-1.5
-                                 py-0.5 text-[10px] font-medium text-state-warn"
-                    >
-                      needs approval
-                    </span>
-                  )}
-                  {recommendation.tool_name && (
-                    <span className="font-mono text-[11px] text-slate-500">
-                      {recommendation.tool_name}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1.5 text-[13px] leading-relaxed text-slate-400">
-                  {recommendation.description}
-                </p>
-              </li>
+              <ApprovalCard
+                key={recommendation.id}
+                recommendation={recommendation}
+                onSettled={onDecision}
+              />
             ))}
           </ul>
         )}

@@ -120,6 +120,7 @@ export function InvestigationPage() {
                 breakdown={breakdown}
                 recommendations={recommendations}
                 failureReason={investigation.failure_reason}
+                onDecision={() => void detail.refetch()}
               />
             ) : (
               <section className="panel px-5 py-8 text-center text-sm text-slate-500">
