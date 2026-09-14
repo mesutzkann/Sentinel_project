@@ -37,6 +37,7 @@ from agents.build import build_machine
 from agents.context import InvestigationContext
 from agents.events import CallbackEmitter, Emitter, EventRecorder, fan_out
 from agents.payloads import final_payload
+from agents.postmortem import PostmortemWriter
 from agents.state_machine import AgentEvent, EventType, RunResult
 from agents.states import State
 from app.api.mcp import get_client, get_registry
@@ -46,6 +47,7 @@ from llm.ollama_provider import OllamaLlmProvider
 from mcp_client.client import McpClient
 from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpToolRegistry
+from rag.memory import IncidentMemory
 from rag.retrievers import Retriever
 from routing.factory import build_router
 
@@ -72,6 +74,7 @@ class RunRecord:
 
     status: str = "running"
     final_state: State | None = None
+    postmortem: dict[str, Any] | None = None
     completed_at: datetime | None = None
     duration_ms: int | None = None
     failure_reason: str | None = None
@@ -125,6 +128,12 @@ class InvestigationService:
             timeout_seconds=config.llm_timeout_seconds,
         )
         self._router = build_router(config)
+
+        # Its own writer rather than a node in the machine. The postmortem is written after the
+        # investigation has ended and reported, so it cannot be a state the runner has to pass
+        # through — and Phase 10 will want to write it again after a fix has been verified,
+        # which is a second call to the same object rather than a second visit to a state.
+        self._writer = PostmortemWriter(self._provider)
 
     def get(self, investigation_id: str) -> RunRecord | None:
         return self._runs.get(investigation_id)
@@ -203,6 +212,53 @@ class InvestigationService:
             record.final_state,
             record.duration_ms,
         )
+
+        await self._remember(record)
+
+    async def _remember(self, record: RunRecord) -> None:
+        """Write the investigation up and put it in the knowledge base.
+
+        After the emitter is closed and the run is recorded, deliberately: this is Phase 9's
+        work, not the investigation's, and a model call for a document must not sit between the
+        conclusion and the backend being told about it. The run has already ended either way —
+        every failure here is reported into `record.postmortem` and logged, and none of them
+        change what the investigation concluded.
+        """
+        if record.ctx.root_cause is None:
+            return
+
+        postmortem = await self._writer.write(
+            record.ctx,
+            duration_ms=record.duration_ms,
+            events=record.recorder.events,
+        )
+
+        if postmortem is None:
+            record.postmortem = {"written": False, "reason": "the model produced no write-up"}
+
+            return
+
+        remembered = await (await self._memory()).remember(postmortem)
+        record.postmortem = {
+            "written": remembered.written,
+            "indexed": remembered.indexed,
+            "path": str(remembered.path),
+            "status": remembered.status,
+            "error": remembered.error,
+            "title": postmortem.title,
+        }
+
+        logger.info(
+            "investigation %s remembered as %s (%s)",
+            record.ctx.investigation_id,
+            remembered.path.name,
+            remembered.status,
+        )
+
+    async def _memory(self) -> IncidentMemory:
+        rag = get_rag_service(self._config)
+
+        return IncidentMemory(rag.pipeline, self._config.knowledge_base_dir)
 
     async def _report_start_failure(self, record: RunRecord, emit: Emitter, reason: str) -> None:
         """Tell the backend the run is over before it ever began.

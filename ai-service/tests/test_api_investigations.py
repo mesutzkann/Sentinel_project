@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from agents.context import InvestigationContext, RootCause
 from agents.events import CallbackEmitter
+from agents.postmortem import PostmortemDraft, PostmortemWriter
 from agents.state_machine import AgentEvent, EventType, RunResult
 from agents.states import State
 from app.api import investigations as investigations_api
@@ -27,6 +28,8 @@ from app.api.investigations import (
 )
 from app.config import settings
 from app.main import app
+from rag.memory import Remembered
+from tests.support import ScriptedProvider
 
 START = {
     "investigation_id": "11111111-1111-1111-1111-111111111111",
@@ -163,7 +166,25 @@ def request(**overrides: Any) -> StartInvestigationRequest:
 
 
 def stub_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The MCP client and the retriever, neither of which a faked machine ever touches."""
+    """The MCP client, the retriever and the write-up.
+
+    The first two a faked machine never touches. The third it does: since Phase 9 a run that
+    reached a conclusion is written up and ingested after it ends, which is a model call and a
+    knowledge base these tests are not about. `test_a_finished_run_is_written_up` covers it.
+    """
+
+    async def none(self: InvestigationService) -> None:
+        return None
+
+    async def no_postmortem(self: InvestigationService, record: Any) -> None:
+        return None
+
+    stub_dependencies_without_postmortem(monkeypatch)
+    monkeypatch.setattr(InvestigationService, "_remember", no_postmortem)
+
+
+def stub_dependencies_without_postmortem(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The MCP client and the retriever only, for the two tests that are about the write-up."""
 
     async def none(self: InvestigationService) -> None:
         return None
@@ -245,3 +266,81 @@ async def test_the_callback_receives_every_event_of_the_run(
     assert [event["type"] for event in posted] == ["step_completed", "completed"]
     assert posted[-1]["payload"]["result"]["status"] == "completed"
     assert record.emitter.delivered == 2
+
+
+async def test_a_finished_run_is_written_up_and_remembered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Phase 9's wiring: the conclusion becomes a document the next investigation can find."""
+    stub_dependencies_without_postmortem(monkeypatch)
+    monkeypatch.setattr(
+        investigations_api, "build_machine", lambda **kwargs: FakeMachine(kwargs["emit"])
+    )
+
+    draft = PostmortemDraft(
+        summary="Orders timed out after the connection pool was cut to 20.",
+        what_we_saw="p95 latency reached 4.2 s and the pool was saturated.",
+        lessons=["A pool size is a capacity limit."],
+    )
+    remembered: list[Any] = []
+
+    class FakeMemory:
+        async def remember(self, postmortem: Any) -> Any:
+            remembered.append(postmortem)
+
+            return Remembered(
+                incident_code=postmortem.incident_code,
+                path=tmp_path / postmortem.filename,
+                written=True,
+                indexed=True,
+                chunks=3,
+                status="ingested",
+            )
+
+    async def memory(self: InvestigationService) -> Any:
+        return FakeMemory()
+
+    monkeypatch.setattr(InvestigationService, "_memory", memory)
+
+    service = InvestigationService(settings())
+    service._writer = PostmortemWriter(ScriptedProvider([draft.model_dump_json()]))
+    record = service.start(request())
+    await record.task
+
+    assert record.status == "completed"
+    assert record.postmortem == {
+        "written": True,
+        "indexed": True,
+        "path": str(tmp_path / remembered[0].filename),
+        "status": "ingested",
+        "error": None,
+        "title": remembered[0].title,
+    }
+
+    # The document carries the run's conclusion, and the timeline the run actually emitted.
+    assert "The connection pool was reduced to 20" in remembered[0].markdown
+    assert "| PLAN | planned |" in remembered[0].markdown
+
+
+async def test_a_run_that_reached_no_conclusion_is_not_written_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NEEDS_HUMAN leaves no precedent behind, and costs no model call trying to write one."""
+    stub_dependencies_without_postmortem(monkeypatch)
+
+    class Inconclusive(FakeMachine):
+        async def run(self, ctx: InvestigationContext) -> RunResult:
+            return RunResult(final_state=State.NEEDS_HUMAN, transitions=1, duration_ms=9)
+
+    monkeypatch.setattr(
+        investigations_api, "build_machine", lambda **kwargs: Inconclusive(kwargs["emit"])
+    )
+
+    provider = ScriptedProvider([])
+    service = InvestigationService(settings())
+    service._writer = PostmortemWriter(provider)
+    record = service.start(request())
+    await record.task
+
+    assert record.postmortem is None
+    assert provider.calls == 0
