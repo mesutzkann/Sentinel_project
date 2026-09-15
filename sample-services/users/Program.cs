@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Sentinel.Samples.Common;
 using Sentinel.Samples.Common.Chaos;
+using Sentinel.Samples.Users;
 using Sentinel.Samples.Users.Domain;
 using Sentinel.Samples.Users.Persistence;
 
@@ -8,6 +9,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddSampleServiceDefaults("users", UsersChaos.All);
 builder.AddSampleDbContext<UsersDbContext>(UsersDbContext.Schema);
+
+// The one service users calls. It exists for the profile endpoint below, and it is what chaos
+// scenario 10 (RETRY_STORM) amplifies.
+builder.Services.AddHttpClient<OrdersClient>(client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Services:Orders"] ?? "http://localhost:8082");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 var app = builder.Build();
 
@@ -26,6 +36,25 @@ app.MapGet("/users/{id:guid}", async (Guid id, UsersDbContext db) =>
     await db.Users.FindAsync(id) is { } user
         ? Results.Ok(user)
         : Results.NotFound(new { message = $"User {id} not found." }));
+
+// A user with their recent orders, which is the read that makes users a caller at all.
+app.MapGet("/users/{id:guid}/orders", async (
+    Guid id,
+    UsersDbContext db,
+    OrdersClient orders,
+    CancellationToken cancellationToken) =>
+{
+    if (await db.Users.FindAsync([id], cancellationToken) is null)
+    {
+        return Results.NotFound(new { message = $"User {id} not found." });
+    }
+
+    return Results.Ok(new
+    {
+        user_id = id,
+        orders = await orders.GetForUserAsync(id, cancellationToken),
+    });
+});
 
 app.MapPost("/users", async (CreateUserRequest request, UsersDbContext db) =>
 {

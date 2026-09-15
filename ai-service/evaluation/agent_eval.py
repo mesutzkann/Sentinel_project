@@ -213,6 +213,27 @@ LOAD_RECIPES: dict[str, LoadRecipe] = {
         ),
         needs_order=True,
     ),
+    "TIMEOUT_TOO_LOW": LoadRecipe(
+        # The checkout, because that is the call carrying the shortened deadline. The gateway's
+        # own list endpoint is `/api/services/health`, which fans out to four /health probes and
+        # never touches CreateOrderAsync — the fault would not be on the path at all.
+        "http://localhost:8080/api/checkout",
+        method="POST",
+        body=_basket(2),
+        # Light. The deadline is 40ms against a checkout that takes about 80ms, and queueing
+        # would push the real latency up until the timeout stopped being "too low" and started
+        # being a fair description of the load.
+        concurrency=8,
+    ),
+    "RETRY_STORM": LoadRecipe(
+        # The profile read, the only path on which users calls anything. `/users` is a local
+        # database read and amplifies nothing.
+        f"http://localhost:8081/users/{DEMO_USER}/orders",
+        # Low, deliberately: this scenario multiplies downstream traffic tenfold by itself, and
+        # driving it hard would saturate orders and turn an amplification into an outage — a
+        # different fault with a different signature.
+        concurrency=6,
+    ),
     "MEMORY_LEAK": LoadRecipe(
         # The write path: the leak retains a record per *delivery*, and the list endpoint
         # delivers nothing. `GET /notifications` would leave the fault untouched.

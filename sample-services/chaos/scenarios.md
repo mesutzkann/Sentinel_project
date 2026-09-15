@@ -28,9 +28,9 @@ observability stack — enabled, driven with load, and the signature in this cat
 out of Prometheus, Loki and Jaeger. The rest are declared: they appear in `GET /chaos` and can be
 enabled, but enabling them does not yet change behaviour.
 
-| Implemented | 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 15 |
+| Implemented | **all fifteen** |
 |---|---|
-| Declared only | 8, 10 |
+| Declared only | — |
 
 ## Signal legend
 
@@ -166,14 +166,28 @@ different payload sizes, which is what gave it away.
 
 | | |
 |---|---|
-| Service | gateway (victim: payments) |
-| Trigger | `HttpClient.Timeout` 30s to 500ms while payments legitimately takes about 800ms |
-| **L** | `TaskCanceledException` in **gateway**; payments logs show success |
-| **M** | Gateway error rate high, payments error rate zero |
-| **T** | Gateway span errors at 500ms while the payments child span **completes successfully** |
+| Service | gateway (victims: none — everything below it succeeds) |
+| Trigger | The deadline on the checkout call drops from 30s to 40ms, below the ~80ms the call takes |
+| **L** | `System.Threading.Tasks.TaskCanceledException: The operation was canceled` in **gateway**; orders logs `Order … paid` and payments logs `Authorized` for the very same requests |
+| **M** | Gateway error rate **99.6%** on `/api/checkout` (13 of 3199 checkouts beat the deadline); orders, payments and notifications all 0%. Gateway latency *falls*, 195 ms to 62 ms, because it stops waiting |
+| **T** | `POST /api/checkout` 163 ms → **500**, its client span cancelled at 50 ms, `orders POST /orders` **499**, and below that `payments POST /payments/authorize` **200** and `notifications POST /notifications` **201** |
 | Discriminator | Caller fails, callee succeeds — the clearest "look upstream" signal in the set |
 | Expected tools | `get_recent_errors`, `get_trace_details`, `get_container_logs` |
 | Fix | `update_env_and_restart` — restore the timeout |
+
+The catalogue originally said 500ms against a call that legitimately takes 800ms. Nothing in this
+stack takes 800ms, so a 500ms deadline would never fire and the scenario would be a no-op. 40ms
+against 80ms is the same mistake at the scale this system actually runs at.
+
+The trace is richer than "caller fails, callee succeeds", and the extra detail is worth reading.
+Orders records **499** — its client went away — rather than an error of its own, while the two
+services below it return 200 and 201 and the order really is paid. So the failure is one service
+deep and the *work* completed everywhere: the 499 is the fingerprint of an abandoned caller, not
+of anything going wrong downstream.
+
+A linked `CancellationTokenSource` per call, not `HttpClient.Timeout`, which throws once the
+client has sent its first request. The timeout has to be changeable while the process runs,
+because a timeout is configuration and misconfiguration is what this scenario is.
 
 ### 9. `WRONG_CONNECTION_STRING`
 
@@ -203,13 +217,25 @@ default, or a single request would outlive the benchmark's whole window.
 | | |
 |---|---|
 | Service | users (victim: orders) |
-| Trigger | Retry policy set to 10 attempts with no backoff |
-| **L** | Repeated identical request logs in orders |
-| **M** | Request rate into orders jumps about 10x with no change in inbound traffic to users |
-| **T** | Traces contain 10 near-identical consecutive child spans |
+| Trigger | `GET /users/{id}/orders` retries the downstream read 10 times and never stops on success |
+| **L** | Repeated identical request logs in orders; **nothing at all** in users |
+| **M** | users 52.8 req/s in, orders 532.9 req/s in — **10.1x**, with users' inbound traffic unchanged |
+| **T** | One inbound request contains **10 client spans**, 10 `GET /orders` server spans and 10 database spans |
 | Discriminator | Downstream load rises while **upstream load does not** — amplification |
 | Expected tools | `get_request_rate`, `get_recent_traces`, `search_code` |
 | Fix | `update_env_and_restart` — sane retry count plus exponential backoff |
+
+Users had no outbound call at all before this, which is why the scenario could be declared and
+not implemented: a retry storm needs a caller and a callee. `GET /users/{id}/orders` is that call,
+and it is a read a user profile would plausibly make.
+
+The defect is a retry loop that never checks whether it already succeeded — a real mistake, and
+one that is only visible in the source, which is why `search_code` is among the tools this is
+diagnosed with. **Nothing fails**: every one of the ten calls returns 200, latency per request
+rises from 20 ms to 93 ms, and the only thing that moves sharply is how much traffic orders
+receives for the same traffic into users. That is what makes it an amplifier rather than an
+outage, and the load recipe keeps concurrency low for the same reason — driving it hard would
+saturate orders and turn the amplification into a different fault.
 
 ---
 

@@ -1,0 +1,53 @@
+{
+  "id": "R14",
+  "scenario": "TIMEOUT_TOO_LOW",
+  "expected_category": "TIMEOUT_TOO_LOW",
+  "incident_code": "INC-00155",
+  "service": "gateway",
+  "query": "checkout is failing at the gateway but customers say their orders went through, what is happening",
+  "discriminator": "The caller fails and the callee succeeds: the gateway gives up while orders records the order as paid and payments records the authorisation, so the failure is the caller's deadline rather than anything downstream.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.9,
+      "summary": "recent errors: gateway only, all 'System.Threading.Tasks.TaskCanceledException: The operation was canceled' on POST /api/checkout; orders, payments and notifications logged no errors in the same window",
+      "raw": {"gateway": {"System.Threading.Tasks.TaskCanceledException": 412}, "orders": {}, "payments": {}, "notifications": {}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_trace_details",
+      "weight": 0.9,
+      "summary": "one failed checkout: gateway POST /api/checkout 163ms status 500, its outgoing client span cancelled at 50ms, orders POST /orders 499, and below that payments POST /payments/authorize 200 and notifications POST /notifications 201",
+      "raw": {"gateway": {"duration_ms": 163, "status": 500}, "gateway_client_span_ms": 50, "orders": {"status": 499}, "payments": {"status": 200}, "notifications": {"status": 201}}
+    },
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_service_logs",
+      "weight": 0.8,
+      "summary": "orders logs for the same window: 'Order 79e67b32 paid, total 39.8 TRY' repeated for every checkout the gateway reported as failed",
+      "raw": {"service": "orders", "sample": "Order 79e67b32-8d62-4def-87c8-b43cabc905bf paid, total 39.8 TRY"}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.8,
+      "summary": "error rate in the last 30 minutes: gateway 100% on POST /api/checkout; orders 0%, payments 0%, notifications 0%",
+      "raw": {"services": {"gateway": 1.0, "orders": 0.0, "payments": 0.0, "notifications": 0.0}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): the gateway's failures land at about 50ms, well below the ~80ms a successful checkout took the day before",
+      "raw": {"gateway_failure_ms": 50, "healthy_checkout_ms": 80}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "architecture gateway: the gateway owns no data and fans out to the other services; its downstream client is configured with a single timeout shared across those calls",
+      "raw": {"path": "services/gateway.md"}
+    }
+  ]
+}

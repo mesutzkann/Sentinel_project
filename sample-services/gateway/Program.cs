@@ -81,8 +81,12 @@ internal static class GatewayChaos
     [
         new(TimeoutTooLow,
             "Downstream timeout set too low",
-            "The HTTP client timeout drops from 30s to 500ms while payments legitimately takes "
-            + "about 800ms, so the gateway times out on calls the callee completes successfully.",
-            new Dictionary<string, string> { ["timeout_ms"] = "500" }),
+            "The deadline on the checkout call drops from 30s to 40ms, below what the call "
+            + "legitimately takes, so the gateway gives up on work the services below it finish.",
+            // 40ms against a checkout that takes about 80ms warm. The catalogue's original
+            // numbers - 500ms against an 800ms call - describe the same mistake at a scale this
+            // stack does not have: nothing here legitimately takes 800ms, so a 500ms deadline
+            // would never fire and the scenario would be a no-op.
+            new Dictionary<string, string> { ["timeout_ms"] = "40" }),
     ];
 }

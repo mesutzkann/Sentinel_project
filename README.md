@@ -165,9 +165,10 @@ curl -X POST http://localhost:8083/payments/authorize   -H 'Content-Type: applic
 curl -X POST http://localhost:8083/chaos/reset
 ```
 
-Thirteen of the fifteen scenarios have their behaviour implemented
-([the catalogue](sample-services/chaos/scenarios.md) marks which); the rest are declared and
-answer `GET /chaos`, with behaviour landing in later phases.
+All fifteen scenarios have their behaviour implemented and verified against the running stack —
+enabled, driven with load, and the signature in [the catalogue](sample-services/chaos/scenarios.md)
+read back out of Prometheus, Loki and Jaeger. Each entry there carries the numbers it was
+measured at.
 
 ## The AI service
 

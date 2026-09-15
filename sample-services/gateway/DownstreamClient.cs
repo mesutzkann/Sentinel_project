@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sentinel.Samples.Common;
+using Sentinel.Samples.Common.Chaos;
 
 namespace Sentinel.Samples.Gateway;
 
@@ -13,13 +14,45 @@ public sealed class DownstreamClient
 {
     private readonly HttpClient _http;
     private readonly IConfiguration _configuration;
+    private readonly ChaosRegistry _chaos;
     private readonly ILogger<DownstreamClient> _logger;
 
-    public DownstreamClient(HttpClient http, IConfiguration configuration, ILogger<DownstreamClient> logger)
+    public DownstreamClient(
+        HttpClient http,
+        IConfiguration configuration,
+        ChaosRegistry chaos,
+        ILogger<DownstreamClient> logger)
     {
         _http = http;
         _configuration = configuration;
+        _chaos = chaos;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// The deadline this call gets, which chaos scenario 8 (TIMEOUT_TOO_LOW) shortens.
+    /// </summary>
+    /// <remarks>
+    /// A linked token rather than <see cref="HttpClient.Timeout"/>, because that property throws
+    /// once the client has sent its first request and this one has to change while the process
+    /// keeps running — a timeout is configuration, and configuration is what this scenario gets
+    /// wrong. <see cref="GetEstateHealthAsync"/> already caps itself the same way.
+    ///
+    /// Returning the caller's own token unchanged when the scenario is off keeps the healthy path
+    /// free of an allocation per call and, more usefully, free of a second deadline that could
+    /// ever fire on its own.
+    /// </remarks>
+    private CancellationTokenSource? Deadline(CancellationToken cancellationToken)
+    {
+        if (!_chaos.IsEnabled(ChaosCodes.TimeoutTooLow))
+        {
+            return null;
+        }
+
+        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        source.CancelAfter(_chaos.GetInt(ChaosCodes.TimeoutTooLow, "timeout_ms", 40));
+
+        return source;
     }
 
     private string Users => _configuration["Services:Users"] ?? "http://localhost:8081";
@@ -54,13 +87,18 @@ public sealed class DownstreamClient
         string? currency,
         CancellationToken cancellationToken)
     {
+        // Scenario 8 lives on this call: it is the one with real work behind it, so it is the one
+        // a too-short deadline cuts off while the services below carry on and finish.
+        using var deadline = Deadline(cancellationToken);
+        var token = deadline?.Token ?? cancellationToken;
+
         var response = await _http.PostAsJsonAsync(
             $"{Orders}/orders",
             new { UserId = userId, Items = items, Currency = currency },
             SampleJson.Options,
-            cancellationToken);
+            token);
 
-        var body = await ReadJsonAsync(response, cancellationToken);
+        var body = await ReadJsonAsync(response, token);
 
         if (!response.IsSuccessStatusCode)
         {

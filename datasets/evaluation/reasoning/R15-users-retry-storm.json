@@ -1,0 +1,53 @@
+{
+  "id": "R15",
+  "scenario": "RETRY_STORM",
+  "expected_category": "RETRY_STORM",
+  "incident_code": "INC-00156",
+  "service": "users",
+  "query": "orders is taking ten times the traffic it was and nobody has changed anything upstream, where is it coming from",
+  "discriminator": "Amplification: downstream load rises tenfold while inbound traffic to the caller is unchanged, and nothing fails anywhere — so the extra requests are being generated inside the system rather than arriving from outside it.",
+  "evidence": [
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_request_rate",
+      "weight": 0.9,
+      "summary": "request rate in the last 30 minutes: users 52.8/s inbound and unchanged from yesterday; orders 532.9/s against its usual 50/s — 10.1x, and the increase is entirely on GET /orders",
+      "raw": {"services": {"users": {"current": 52.8, "baseline": 52.0}, "orders": {"current": 532.9, "baseline": 52.0}}, "amplification": 10.1}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_recent_traces",
+      "weight": 0.9,
+      "summary": "a single GET /users/{id}/orders trace contains 10 client spans to orders, 10 GET /orders server spans and 10 database spans — ten identical downstream calls for one inbound request",
+      "raw": {"inbound_spans": 1, "client_spans": 10, "orders_server_spans": 10, "db_spans": 10}
+    },
+    {
+      "source": "source_code",
+      "tool": "source-code-mcp/search_code",
+      "weight": 0.9,
+      "summary": "users/OrdersClient.cs loops attempts times calling orders and assigns the result each time, with no break when the response succeeds; attempts comes from configuration and is 10",
+      "raw": {"path": "sample-services/users/OrdersClient.cs", "attempts": 10, "breaks_on_success": false}
+    },
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 across users and orders — every one of the amplified calls returns 200",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): users p50 rose from 20 to 93 while orders per-request latency is unchanged — the caller is slower because it is making ten round trips, not because the callee got slow",
+      "raw": {"services": {"users": {"before": 20, "after": 93}, "orders": {"unchanged": true}}}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook retries: retry counts and backoff are configured per client; a retry that does not stop on success multiplies downstream load by the attempt count",
+      "raw": {"path": "runbooks/retries.md"}
+    }
+  ]
+}
