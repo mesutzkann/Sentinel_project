@@ -1,0 +1,472 @@
+{
+  "uid": "sentinel-self",
+  "title": "SentinelAI Itself",
+  "description": "The observability tool, observed. Every panel here is drawn from SentinelAI's own OTLP export — the same Prometheus and the same Loki the agent reads the sample services through. HTTP rate, errors and latency for sentinel-ai-service and sentinel-backend are deliberately absent: both emit the standard http.server semantic conventions, so they appear in Service Health alongside everything else, and this dashboard is left to the four things only this system has — investigations, model calls, tool calls and retrieval.",
+  "tags": [
+    "sentinel-ai",
+    "self-observability"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(sentinel_llm_call_duration_seconds_count, model)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Investigations",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Outcomes",
+      "description": "COMPLETED, NEEDS_HUMAN and FAILED are three different things and are counted apart. NEEDS_HUMAN is not a failure — Phase 7 made it the normal end of a run that found evidence without a conclusion it would stand behind — but a dashboard where it is rising is a dashboard saying the agent has stopped finishing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "color": { "mode": "fixed", "fixedColor": "text" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "COMPLETED" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "NEEDS_HUMAN" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "FAILED" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "instant": true,
+          "expr": "sum by (final_state) (increase(sentinel_investigation_duration_seconds_count[$__range]))",
+          "legendFormat": "{{final_state}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Investigation duration",
+      "description": "End to end, first state to terminal state. The measured range on a 6 GB laptop is roughly 74 s on the 3B and 90 s on the 7B, rising to 140 s when Ollama has to evict the embedding model first — so a p95 climbing past three minutes usually means model eviction rather than a harder incident.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sentinel_investigation_duration_seconds_bucket[15m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sentinel_investigation_duration_seconds_bucket[15m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Where the time goes",
+      "description": "Total seconds spent in each state over the dashboard's range. This is the panel the total duration cannot replace: an investigation that got slower is either thinking longer or collecting longer, and those have opposite fixes. Only steps that completed are counted — a state that ended the run is timed as part of the investigation instead.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "lineWidth": 1, "fillOpacity": 80 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "legend": { "showLegend": false }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": { "state": "State", "Value": "Seconds" }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "instant": true,
+          "format": "table",
+          "expr": "topk(8, sum by (state) (increase(sentinel_investigation_step_duration_seconds_sum[$__range])))",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "The model",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Model call latency",
+      "description": "One call to Ollama, measured at the provider — which every model call in the project passes through, the agent's nodes, the router, HyDE and the evaluation runners alike. Calls that produced no completion are included, unlike the refusals on the tool panel: an unreachable runtime is time the caller genuinely spent waiting, so a p95 pinned near the timeout is the signal rather than a distortion of it. The router should sit near 2 s; anything approaching its 20 s timeout means the tuned model is not loaded or not on the GPU.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (model, le) (rate(sentinel_llm_call_duration_seconds_bucket{model=~\"$model\"}[10m])))",
+          "legendFormat": "{{model}} p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (model, le) (rate(sentinel_llm_call_duration_seconds_bucket{model=~\"$model\"}[10m])))",
+          "legendFormat": "{{model}} p95"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Model calls by outcome",
+      "description": "A model that has stopped answering is recorded as a call under outcome=unavailable rather than as an absence of calls, because an absence looks exactly like an idle system. `unavailable` is the environment — Ollama down, or the model not pulled; `error` is a runtime that answered with something that was not a completion.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 25, "stacking": { "mode": "normal" }, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "unavailable" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(sentinel_llm_call_duration_seconds_count{model=~\"$model\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Tokens",
+      "description": "Prompt and completion counted apart, and only when the runtime reported them — Ollama omits the prompt count for a cached prompt, and a zero there means \"not reported\" rather than a number this project invented. Prompt tokens rising without completion tokens rising is evidence growing, which is the cost the context budget exists to bound.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(sentinel_llm_tokens_total{model=~\"$model\"}[5m]))",
+          "legendFormat": "{{kind}}/s"
+        }
+      ]
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "Tools",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Tool calls by server",
+      "description": "How the agent actually spends its tool budget. A server missing from this panel during an investigation is a server the plan never reached — which the timeline explains and this does not.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 25, "stacking": { "mode": "normal" }, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (server) (rate(sentinel_tool_call_duration_seconds_count[5m]))",
+          "legendFormat": "{{server}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Tool latency p95 by server",
+      "description": "Refusals are excluded rather than merely small. They are recorded at zero, which is true — policy refused before anything was called — but zero is still a point in the bottom bucket, and a server whose calls were all refused would otherwise report a p95 of nine milliseconds for work it never did. Timeouts are kept, because those are time something actually waited: a p95 at the 60 s client timeout is a server that has stopped answering.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (server, le) (rate(sentinel_tool_call_duration_seconds_bucket{outcome!=\"refused\"}[10m])))",
+          "legendFormat": "{{server}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Calls that did not succeed",
+      "description": "The three ways a tool call fails, kept apart because they want different things done about them: `refused` never reached a server and is policy working, `timeout` is a server too slow to answer, `error` is one that answered with a failure. Collapsed into a single failure count they would be one unexplained line going up.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": { "align": "auto" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Value", "desc": true }]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true },
+            "renameByName": { "Value": "Calls" }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "instant": true,
+          "format": "table",
+          "expr": "sum by (server, tool, outcome) (increase(sentinel_tool_call_duration_seconds_count{outcome!=\"ok\"}[$__range])) > 0"
+        }
+      ]
+    },
+    {
+      "id": 400,
+      "type": "row",
+      "title": "Retrieval",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Knowledge base search latency",
+      "description": "Live searches only. The evaluation assembles its own retrievers and is unmeasured by construction, so 240 back-to-back benchmark searches cannot move this p95. A reranked search carries a cross-encoder pass over the fused candidates and is legitimately the slowest of the four.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 25 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (retriever, le) (rate(sentinel_rag_retrieval_duration_seconds_bucket{outcome=\"ok\"}[10m])))",
+          "legendFormat": "{{retriever}} p95"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Searches by outcome",
+      "description": "The agent treats a failed search as a note and carries on — correctly, since history is supporting evidence rather than the investigation. That is also what makes an embedding model that has stopped answering cost the agent quality without costing it an error anywhere else. This is where it shows.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 25 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 25, "stacking": { "mode": "normal" }, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "error" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(sentinel_rag_retrieval_duration_seconds_count[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 500,
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "logs",
+      "title": "SentinelAI warnings and errors",
+      "description": "Both halves of the system, from the same Loki the agent queries through logs-mcp. The AI service reaches it through a handler on the root logger and the backend through Serilog's OTLP sink, so neither had to learn about OpenTelemetry to appear here. The filter is case-insensitive and spells the level more than once because the two runtimes do not agree on the word: Serilog writes `Warning`, the OTel handler writes `WARN`. The regex this started as matched only the first, and returned nothing at all for the AI service — which on a healthy system is indistinguishable from a working panel.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 33 },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"sentinel-ai-service|sentinel-backend\"} | severity_text =~ `(?i)(warn|warning|error|critical|fatal)`"
+        }
+      ]
+    }
+  ]
+}

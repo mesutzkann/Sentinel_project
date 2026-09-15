@@ -15,6 +15,13 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp_client.approval import APPROVAL_ARGUMENT
 from mcp_client.policy import McpPolicy, PolicyResult
 from mcp_client.registry import McpServerConfig, McpToolRegistry
+from observability.instruments import (
+    OUTCOME_ERROR,
+    OUTCOME_OK,
+    OUTCOME_REFUSED,
+    OUTCOME_TIMEOUT,
+    record_tool_call,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,36 +98,64 @@ class McpClient:
                         await session.initialize()
                         response = await session.call_tool(tool.name, arguments)
         except TimeoutError:
-            return ToolCallResult(
-                tool=tool.name,
-                server=tool.server,
-                arguments=arguments,
-                success=False,
-                latency_ms=int((time.perf_counter() - started) * 1000),
-                error=f"{qualified_name} did not answer within {self._timeout:.0f}s.",
+            return self._measured(
+                ToolCallResult(
+                    tool=tool.name,
+                    server=tool.server,
+                    arguments=arguments,
+                    success=False,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    error=f"{qualified_name} did not answer within {self._timeout:.0f}s.",
+                ),
+                OUTCOME_TIMEOUT,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a failed call, not a crash
-            return ToolCallResult(
-                tool=tool.name,
-                server=tool.server,
-                arguments=arguments,
-                success=False,
-                latency_ms=int((time.perf_counter() - started) * 1000),
-                error=f"{type(exc).__name__}: {exc}",
+            return self._measured(
+                ToolCallResult(
+                    tool=tool.name,
+                    server=tool.server,
+                    arguments=arguments,
+                    success=False,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+                OUTCOME_ERROR,
             )
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         is_error = bool(getattr(response, "is_error", False))
 
-        return ToolCallResult(
-            tool=tool.name,
-            server=tool.server,
-            arguments=arguments,
-            success=not is_error,
-            latency_ms=latency_ms,
-            content=_unwrap(response),
-            error=_unwrap(response) if is_error else None,
+        return self._measured(
+            ToolCallResult(
+                tool=tool.name,
+                server=tool.server,
+                arguments=arguments,
+                success=not is_error,
+                latency_ms=latency_ms,
+                content=_unwrap(response),
+                error=_unwrap(response) if is_error else None,
+            ),
+            OUTCOME_OK if not is_error else OUTCOME_ERROR,
         )
+
+    @staticmethod
+    def _measured(result: ToolCallResult, outcome: str) -> ToolCallResult:
+        """Record the call, then hand the result back unchanged.
+
+        The outcome is passed in rather than read off ``result.success``, because the three ways
+        a call can fail want different things done about them and a boolean cannot tell them
+        apart: a timeout is a slow server, an error is a server that answered badly, and a
+        refusal never reached a server at all. On a dashboard those are three different problems;
+        collapsed into ``success=false`` they are one unexplained line going up.
+        """
+        record_tool_call(
+            server=result.server,
+            tool=result.tool,
+            duration_ms=result.latency_ms,
+            outcome=outcome,
+        )
+
+        return result
 
     def _refused(
         self,
@@ -132,13 +167,19 @@ class McpClient:
 
         logger.warning("Policy refused %s: %s", qualified_name, decision.decision.value)
 
-        return ToolCallResult(
-            tool=tool or qualified_name,
-            server=server,
-            arguments=arguments,
-            success=False,
-            latency_ms=0,
-            error=decision.reason,
+        return self._measured(
+            ToolCallResult(
+                tool=tool or qualified_name,
+                server=server,
+                arguments=arguments,
+                success=False,
+                # Zero, and truthfully so: policy refused before anything was called. It makes
+                # refusals a spike in the count with no effect on the latency quantiles, which is
+                # the right shape — a refusal is a decision, not a slow tool.
+                latency_ms=0,
+                error=decision.reason,
+            ),
+            OUTCOME_REFUSED,
         )
 
 

@@ -228,7 +228,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service_name=~\"$service\"} | severity_text =~ `Warning|Error|Critical`"
+          "expr": "{service_name=~\"$service\"} | severity_text =~ `(?i)(warn|warning|error|critical|fatal)`"
         }
       ]
     }

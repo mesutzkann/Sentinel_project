@@ -23,6 +23,7 @@ from app.api import models as models_api
 from app.api import rag as rag_api
 from app.config import settings
 from llm.prompts import registry
+from observability import configure_telemetry, instrument_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,14 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Before the application object exists, because the OTLP log handler has to be on the root logger
+# for anything logged during startup to reach Loki, and because instruments built against the
+# no-op provider stay no-ops. Silent unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+_telemetry = configure_telemetry(settings().otel_exporter_otlp_endpoint)
+
+if not _telemetry:
+    logger.info("telemetry: not reporting (OTEL_EXPORTER_OTLP_ENDPOINT is unset)")
 
 app = FastAPI(
     title="SentinelAI AI Service",
@@ -59,6 +68,13 @@ app.include_router(investigations_api.router)
 app.include_router(models_api.router)
 app.include_router(actions_api.router)
 app.include_router(evaluations_api.router)
+
+# After the routers, so the middleware sees every route, and only when there is somewhere to send
+# the spans. It emits `http.server.request.duration` under the same semantic conventions the .NET
+# services use, which is what makes this service appear in the Service Health dashboard alongside
+# them rather than needing latency panels of its own.
+if _telemetry:
+    instrument_app(app)
 
 
 class Health(BaseModel):

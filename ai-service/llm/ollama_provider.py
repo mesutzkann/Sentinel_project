@@ -16,6 +16,12 @@ from llm.base import (
     LlmUnavailableError,
     LocalLlmProvider,
 )
+from observability.instruments import (
+    OUTCOME_ERROR,
+    OUTCOME_OK,
+    OUTCOME_UNAVAILABLE,
+    record_llm_call,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,49 @@ class OllamaLlmProvider(LocalLlmProvider):
         self,
         messages: list[LlmMessage],
         options: LlmOptions | None = None,
+    ) -> LlmCompletion:
+        """Generate, and record what it cost.
+
+        The measuring is done here rather than in the callers because this is the one place every
+        model call in the project passes through — the agent's nodes, the router, HyDE, the
+        evaluation runners and the /llm endpoints all reach a runtime through a provider. A
+        failed call is recorded with the same instrument as a successful one, which is the point:
+        a model that has started timing out shows up as latency at the ceiling under
+        ``outcome="unavailable"`` rather than as an absence of data.
+        """
+        started = time.perf_counter()
+
+        try:
+            completion = await self._complete(messages, options)
+        except LlmUnavailableError:
+            self._record(started, OUTCOME_UNAVAILABLE)
+            raise
+        except Exception:
+            self._record(started, OUTCOME_ERROR)
+            raise
+
+        record_llm_call(
+            model=completion.model,
+            duration_ms=completion.latency_ms,
+            outcome=OUTCOME_OK,
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+        )
+
+        return completion
+
+    def _record(self, started: float, outcome: str) -> None:
+        """Record a call that produced no completion, and so has no latency of its own."""
+        record_llm_call(
+            model=self._model,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            outcome=outcome,
+        )
+
+    async def _complete(
+        self,
+        messages: list[LlmMessage],
+        options: LlmOptions | None,
     ) -> LlmCompletion:
         options = options or LlmOptions()
         payload = self._build_payload(messages, options)

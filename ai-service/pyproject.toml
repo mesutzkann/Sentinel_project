@@ -15,6 +15,15 @@ dependencies = [
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "pgvector>=0.3.0",
+    # Self-observability (Phase 11). Core rather than an extra: the hot path imports only
+    # `opentelemetry-api`, which is inert without a provider, and the SDK is a couple of MB that
+    # has to already be there for OTEL_EXPORTER_OTLP_ENDPOINT to be the only thing a demo turns
+    # on. An extra would make the dashboard depend on somebody having read a second install line.
+    "opentelemetry-api>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +62,7 @@ packages = [
     "llm",
     "llm.prompts",
     "reporting",
+    "observability",
     "mcp_client",
     "rag",
     "routing",

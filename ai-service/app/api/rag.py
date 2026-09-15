@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, settings
 from llm.ollama_provider import OllamaLlmProvider
+from observability.retrieval import InstrumentedRetriever
 from rag.chunking import MarkdownChunker
 from rag.context_builder import ContextBuilder
 from rag.documents import SourceType
@@ -140,6 +141,15 @@ class RagService:
                 candidates=config.retrieval_candidates,
                 max_per_document=cap,
             )
+
+        # Wrapped last, so that every retriever this service hands out is measured whichever name
+        # the caller asked for — /rag/search by request, the agent's SEARCH_HISTORY node by
+        # HISTORY_RETRIEVER. This is the boundary between live retrieval and benchmark
+        # retrieval: `rag_eval` assembles its own retrievers and is unmeasured by construction,
+        # which keeps 240 back-to-back benchmark searches out of the p95 the dashboard reports.
+        self.retrievers = {
+            name: InstrumentedRetriever(retriever) for name, retriever in self.retrievers.items()
+        }
 
         self._index_loaded = False
 

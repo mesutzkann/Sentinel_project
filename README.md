@@ -135,12 +135,20 @@ docker compose --profile core --profile samples --profile observability up -d --
 ```
 
 The five services export traces, metrics and logs over OTLP to one collector, which fans them
-out to Jaeger, Prometheus and Loki. Grafana arrives with all three wired up and a provisioned
-dashboard — nothing is clicked together by hand.
+out to Jaeger, Prometheus and Loki. Grafana arrives with all three wired up and provisioned
+dashboards — nothing is clicked together by hand.
+
+SentinelAI reports into the same three. The backend and the AI service export under the standard
+HTTP semantic conventions, so they appear in `Service Health` next to the services they
+investigate; on top of that the AI service records what only it has — investigations by outcome
+and duration, where an investigation's minutes went by state, model call latency and tokens, MCP
+tool calls by server and outcome, and knowledge base search latency. That is the `SentinelAI
+Itself` dashboard. Both natively run processes read `OTEL_EXPORTER_OTLP_ENDPOINT` and stay silent
+when it is unset, so neither needs the observability profile to start.
 
 | | | |
 |---|---|---|
-| Grafana | <http://localhost:3000> | `Service Health` dashboard, under the SentinelAI folder |
+| Grafana | <http://localhost:3000> | `Service Health` and `SentinelAI Itself`, under the SentinelAI folder |
 | Jaeger | <http://localhost:16686> | one checkout is a five-service trace |
 | Prometheus | <http://localhost:9090> | `job` is the service name, matching `services.metrics_job` |
 | Loki | <http://localhost:3100> | queried by the dashboard, not usually directly |
@@ -561,10 +569,10 @@ docs/             Planning, ADRs, architecture notes
 | 5 | Hybrid RAG | **Done** |
 | 6 | Reranker and retrieval evaluation | **Done** |
 | 7 | Investigation agent | **Done** |
-| 8 | Fine-tuned router | Next |
-| 9 | Incident memory | |
-| 10 | Human-in-the-loop remediation | |
-| 11 | Evaluation dashboard | |
+| 8 | Fine-tuned router | **Done** |
+| 9 | Incident memory | **Done** |
+| 10 | Human-in-the-loop remediation | **Done** |
+| 11 | Evaluation dashboard | In progress |
 | 12 | Polish, docs, CI | |
 
 Each phase has a done criterion in [docs/planning.md](docs/planning.md) and is not left until it

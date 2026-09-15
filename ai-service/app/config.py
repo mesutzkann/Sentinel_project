@@ -177,6 +177,15 @@ class Settings(BaseSettings):
     # Origins allowed to call this service from a browser. The Vite dev server by default.
     cors_origins: str = "http://localhost:5173"
 
+    # ---- Self-observability ----
+    # Where this service reports its own traces, metrics and logs. Spelled exactly as the OTel
+    # SDKs and the backend spell it, because it is the same variable: one endpoint in .env turns
+    # reporting on for the whole stack. Empty is the default and means silent — the service runs
+    # against `--profile core` alone, or against nothing, with no exporter retrying into a closed
+    # port. The compose stack publishes the collector on 127.0.0.1:4317, so a local run sets
+    # OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317.
+    otel_exporter_otlp_endpoint: str = ""
+
     # The key approval tokens are signed with. Since Phase 10 a token is not this secret: it is
     # an HMAC over the recommendation, the tool and a hash of the arguments, with an expiry, so
     # approving "restart the orders container" authorises that and nothing else. This value is

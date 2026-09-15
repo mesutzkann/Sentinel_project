@@ -44,6 +44,7 @@ from typing import Any
 
 from agents.context import InvestigationContext, ToolBudgetExhaustedError
 from agents.states import TERMINAL_STATES, State
+from observability.instruments import record_investigation, record_step
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,13 @@ class StateMachine:
 
             elapsed = int((time.perf_counter() - step_started) * 1000)
 
+            # Only a step that returned a transition is measured. The three exits above end the
+            # run, and their step is timed as part of the investigation total rather than as a
+            # step that completed — the state-duration series answers "where do the minutes go
+            # on a working investigation", and a state that always dies in it would otherwise
+            # look like the fastest one.
+            record_step(state=state, duration_ms=elapsed)
+
             await self._emit(
                 AgentEvent(
                     type=EventType.STEP_COMPLETED,
@@ -261,7 +269,7 @@ class StateMachine:
             )
         )
 
-        return RunResult(
+        result = RunResult(
             final_state=final,
             transitions=transitions,
             duration_ms=int((time.perf_counter() - started) * 1000),
@@ -270,6 +278,13 @@ class StateMachine:
             visits=Counter(visits),
             failure_reason=reason,
         )
+
+        # Every run ends here — the terminal state, the budget, the ceiling and an exception from
+        # a node all arrive through this one method — so this is the only place the count of
+        # investigations can be kept without a way to miss one.
+        record_investigation(final_state=str(final), duration_ms=result.duration_ms)
+
+        return result
 
     async def _abort(
         self,
