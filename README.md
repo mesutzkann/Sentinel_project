@@ -53,7 +53,9 @@ the samples through — the `SentinelAI Itself` dashboard is drawn from that. `d
 is the one process that exports nothing, because chaos scenario 12 is recognised by a failure
 that terminates at an external span.
 
-Design decisions and their reasoning live in [docs/adr/](docs/adr/).
+[docs/architecture.md](docs/architecture.md) is the map: the seams, the investigation's
+state machine, who owns which schema, and why the boundaries are where they are. The
+individual decisions that were hard enough to argue about live in [docs/adr/](docs/adr/).
 
 ## Requirements
 
