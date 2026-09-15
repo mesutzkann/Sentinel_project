@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Sentinel.Samples.Common.Chaos;
 using Sentinel.Samples.Payments.Persistence;
 
 namespace Sentinel.Samples.Payments;
@@ -6,7 +7,7 @@ namespace Sentinel.Samples.Payments;
 /// <summary>
 /// Runtime behaviour behind the payments scenarios that need more than a flipped branch.
 /// </summary>
-public sealed class ChaosBehaviour
+public sealed class ChaosBehaviour : IChaosActivationHandler
 {
     private const string MerchantA = "MERCHANT-A";
     private const string MerchantB = "MERCHANT-B";
@@ -17,14 +18,66 @@ public sealed class ChaosBehaviour
     /// </summary>
     private static readonly TimeSpan InterleaveDelay = TimeSpan.FromMilliseconds(150);
 
+    private readonly ChaosRegistry _chaos;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ChaosBehaviour> _logger;
 
-    public ChaosBehaviour(IServiceScopeFactory scopeFactory, ILogger<ChaosBehaviour> logger)
+    public ChaosBehaviour(
+        ChaosRegistry chaos,
+        IServiceScopeFactory scopeFactory,
+        ILogger<ChaosBehaviour> logger)
     {
+        _chaos = chaos;
         _scopeFactory = scopeFactory;
         _logger = logger;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Scenario 14 is the only one here that needs an activation hook, and what it needs is a
+    /// timestamp. The scenario is a *deployment*, not a defect that was always there: the
+    /// evidence the agent has to find is that the error rate stepped up at one instant and that
+    /// something was rolled out at that same instant. The commit already exists in the repository
+    /// and its own timestamp is whenever it was authored, so the line below is what ties it to
+    /// now.
+    ///
+    /// Logged at warning, and worded the way a deployment tool words it, because this line is
+    /// meant to be found by <c>search_logs</c> and then taken to git-mcp.
+    /// </remarks>
+    public Task OnEnabledAsync(string code, CancellationToken cancellationToken)
+    {
+        if (code == ChaosCodes.BadDeploymentRegression)
+        {
+            var commit = _chaos.GetString(
+                ChaosCodes.BadDeploymentRegression, "commit", "unknown");
+
+            _logger.LogWarning(
+                "Deployment of commit {Commit} to payments completed at {DeployedAt:O}",
+                commit,
+                DateTimeOffset.UtcNow);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Scenario 11 (DOWNSTREAM_LATENCY_CASCADE): holds the authorisation open for seconds.
+    /// </summary>
+    /// <remarks>
+    /// A wait rather than work, and the distinction is the scenario's discriminator against
+    /// scenario 15: the thread is idle, container CPU does not move, and the time shows up as a
+    /// span that is doing nothing. What makes this one interesting is not the delay but what it
+    /// does to everyone else — orders awaits payments and gateway awaits orders, so p99 rises in
+    /// three services at once while only one of them is the cause.
+    ///
+    /// **Nothing is logged here on purpose.** The catalogue's signature is that payments is quiet
+    /// while timeouts appear at the edge, and a warning in the slow service would hand the agent
+    /// the answer that the trace is supposed to make it work for.
+    /// </remarks>
+    public Task DelayAuthorizationAsync(CancellationToken cancellationToken) =>
+        Task.Delay(
+            _chaos.GetInt(ChaosCodes.DownstreamLatencyCascade, "delay_ms", 3000),
+            cancellationToken);
 
     /// <summary>
     /// Scenario 3 (DB_DEADLOCK): takes the two merchant balance locks in one order while a

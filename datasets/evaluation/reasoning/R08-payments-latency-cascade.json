@@ -1,0 +1,53 @@
+{
+  "id": "R08",
+  "scenario": "DOWNSTREAM_LATENCY_CASCADE",
+  "expected_category": "DOWNSTREAM_LATENCY_CASCADE",
+  "incident_code": "INC-00149",
+  "service": "payments",
+  "query": "checkout has got very slow across the whole stack and three services look bad at once, where is this actually coming from",
+  "discriminator": "A multi-service symptom with a single-service cause: the trace shows gateway and orders merely waiting on payments, whose own children are still fast, and nothing anywhere is failing.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 in the last 30 minutes across gateway, orders and payments",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.7,
+      "summary": "response time in the last 30 minutes (ms): gateway p99=3078, orders p99=3071, payments p99=3060, notifications p99=44 — three services degraded together",
+      "raw": {"services": {"gateway": {"p99": 3078}, "orders": {"p99": 3071}, "payments": {"p99": 3060}, "notifications": {"p99": 44}}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.5,
+      "summary": "error rate in the last 30 minutes: 0% everywhere — every checkout still returns 201",
+      "raw": {"services": {"gateway": 0.0, "orders": 0.0, "payments": 0.0}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_slowest_spans",
+      "weight": 0.9,
+      "summary": "slowest spans: POST /api/checkout 3078ms contains orders POST /orders 3071ms contains payments POST /payments/authorize 3060ms; inside payments the call to notifications is 42ms and the Npgsql span is 4ms",
+      "raw": {"chain": [{"service": "gateway", "operation": "POST /api/checkout", "duration_ms": 3078}, {"service": "orders", "operation": "POST /orders", "duration_ms": 3071}, {"service": "payments", "operation": "POST /payments/authorize", "duration_ms": 3060}], "payments_children": {"notifications": 42, "npgsql": 4}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_cpu_usage",
+      "weight": 0.6,
+      "summary": "cpu utilisation in the last 30 minutes: payments 2.1%, every other service below 3% — the slow service is idle, not busy",
+      "raw": {"services": {"payments": 0.021, "orders": 0.018, "gateway": 0.014}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_service_dependencies",
+      "weight": 0.6,
+      "summary": "service dependencies: gateway calls orders and users; orders calls payments; payments calls notifications",
+      "raw": {"edges": [["gateway", "orders"], ["gateway", "users"], ["orders", "payments"], ["payments", "notifications"]]}
+    }
+  ]
+}

@@ -28,9 +28,9 @@ observability stack — enabled, driven with load, and the signature in this cat
 out of Prometheus, Loki and Jaeger. The rest are declared: they appear in `GET /chaos` and can be
 enabled, but enabling them does not yet change behaviour.
 
-| Implemented | 1, 2, 3, 4, 5, 6, 15 |
+| Implemented | 1, 2, 3, 4, 5, 6, 11, 13, 14, 15 |
 |---|---|
-| Declared only | 7, 8, 9, 10, 11, 12, 13, 14 |
+| Declared only | 7, 8, 9, 10, 12 |
 
 ## Signal legend
 
@@ -200,13 +200,25 @@ stack trace names the real file and line the way a production defect would.
 | | |
 |---|---|
 | Service | payments (victims: orders, gateway) |
-| Trigger | 3s artificial delay in the payment authorisation path |
-| **L** | Quiet in payments; timeouts appear at the edge |
-| **M** | p99 rises in **three** services simultaneously |
-| **T** | `get_slowest_spans` isolates payments as the single slow span; parents merely wait |
+| Trigger | 3s wait in the authorisation path, before the card-network call |
+| **L** | **Nothing, anywhere.** Payments is quiet and no caller errors |
+| **M** | p99 rises in **three** services simultaneously; error rate flat at zero |
+| **T** | gateway 3078 ms → orders 3071 ms → payments 3060 ms, while payments' own children (notifications 42 ms, Npgsql 4 ms) stay fast |
 | Discriminator | Multi-service symptom with a single-service cause — tests whether the agent follows the trace instead of blaming the loudest service |
 | Expected tools | `get_slowest_spans`, `get_service_dependencies`, `get_response_time` |
 | Fix | `update_env_and_restart` — disable the delay |
+
+An earlier version of this entry promised timeouts at the edge. There are none, and there should
+not be: every `HttpClient` in the stack is configured with a 30s timeout, so a 3s delay is
+absorbed by all three services and every request returns 201. Raising the delay past 30s to
+produce them would turn a latency fault into an outage — the mistake the null-reference scenario
+taught — and would make this indistinguishable from scenario 8, which *is* the timeout scenario.
+**A cascade with nothing failing is the harder and more honest test**: the agent has to follow
+the trace down rather than look for errors.
+
+The wait is `Task.Delay` rather than work, and that is the discriminator against scenario 15: the
+thread is idle and container CPU does not move, so the two slow-service scenarios are told apart
+by whether a core is busy.
 
 ### 12. `EXTERNAL_DEPENDENCY_UNAVAILABLE`
 
@@ -226,13 +238,36 @@ stack trace names the real file and line the way a production defect would.
 | | |
 |---|---|
 | Service | payments |
-| Trigger | The breaker opens after a burst and the half-open probe never succeeds |
-| **L** | `Circuit breaker opened for payment-gateway`, then `BrokenCircuitException` |
+| Trigger | The card-network call refuses; after 5 consecutive failures the breaker opens, and every half-open probe refuses too |
+| **L** | `Circuit breaker opened for payment-gateway after 5 consecutive failures`, then repeated `BrokenCircuitException`, then `half-open, probing with one request` followed by the breaker opening again |
 | **M** | Error rate high **and latency very low** — requests fail without doing work |
 | **T** | Spans end in single-digit milliseconds with an error status |
 | Discriminator | **Fast failures.** Low latency plus high error rate is unique to this scenario and separates it from 1 and 11 |
 | Expected tools | `search_logs`, `get_error_rate`, `get_response_time` |
 | Fix | `restart_container` plus tuned breaker thresholds |
+
+Measured on one request at a time: a healthy authorisation is 200 in 56 ms, the five failures
+that open the breaker are 500 in 9 ms, and once it is open they are 500 in **4 ms**. Latency
+falling *below* the healthy baseline while the error rate rises is the giveaway against
+scenarios 1 and 11, where failures are slow or absent.
+
+**It is not unique, and scenario 14 is the reason.** A bad deployment in the same service also
+fails fast — 500 in about 10 ms — so latency alone does not separate them, and an earlier version
+of this entry claiming it did would have sent the agent to the wrong conclusion. Two signals do
+separate them, and both are designed in rather than incidental:
+
+* **The shape of the onset.** This breaker needs five consecutive failures before it opens, so
+  the error rate ramps over the first few requests and then pins. Scenario 14 steps from zero to
+  total on a single request, because the defect is on every code path from the instant it is
+  deployed.
+* **What the logs say.** `Circuit breaker opened for payment-gateway` and `BrokenCircuitException`
+  here; `Deployment of commit … completed at …` and `ArgumentOutOfRangeException` there. The
+  second of those is what takes the investigation to git-mcp rather than to the breaker.
+
+Nothing simulates being stuck. The breaker opens because calls genuinely failed and reopens
+because the probe genuinely failed, which is how a real breaker behaves while its dependency is
+still down — the log shows the full cycle, with `after 6 consecutive failures` on the reopen
+being the failed probe counted.
 
 ---
 
@@ -243,13 +278,28 @@ stack trace names the real file and line the way a production defect would.
 | | |
 |---|---|
 | Service | payments |
-| Trigger | A real commit in the sample repo introduces the defect; enabling the scenario marks that commit as "deployed now" |
-| **L** | Errors begin **abruptly**, not gradually |
-| **M** | Error rate steps from 0 to N at a single timestamp |
-| **G** | `get_recent_commits` shows a commit whose timestamp matches error onset; `get_commit_diff` shows the change |
-| Discriminator | The strongest **temporal correlation** signal — onset aligns with a commit, not with load |
-| Expected tools | `get_recent_commits`, `get_commits_between`, `get_commit_diff` |
+| Trigger | A real commit in this repository tightened the TRY rounding by one place; enabling the scenario marks that commit as deployed now |
+| **L** | `Deployment of commit {sha} to payments completed at {timestamp}` at warning, then `System.ArgumentOutOfRangeException: Decimal can only round to between 0 and 28 digits of precision`, stack naming `PaymentProcessor.cs` |
+| **M** | Error rate steps from 0 to **100%** on one request, with latency unchanged at about 10 ms |
+| **G** | The deployment line carries the sha; `get_commit_diff` on it shows the rounding change |
+| Discriminator | The strongest **temporal correlation** signal — onset aligns with a deployment, not with load, input or elapsed time |
+| Expected tools | `search_logs`, `get_recent_commits`, `get_commit_diff` |
 | Fix | `revert_commit` |
+
+The defect is real arithmetic, not a thrown exception standing in for one: the change rounds one
+place tighter than the currency's own precision, every currency in the map has two or fewer minor
+units, and `Math.Round` rejects a negative count. It is written the way the mistake would really
+be made — a plausible "store amounts in minor units" change with nothing checking that the result
+is still a legal argument.
+
+**The commit hash is the link, not the commit timestamp.** git-mcp reads this repository, whose
+commits are dated whenever they were authored, so a scenario that relied on a commit timestamp
+matching error onset could never fire. What matches the onset is the *deployment*, and the
+deployment line is what names the commit — which is also how it works in production, where the
+thing that happened at 14:32 is a rollout rather than a `git commit`.
+
+Scenario 13 in the same service also fails fast. The two are separated by the onset shape and by
+the log lines; see the note under scenario 13.
 
 ### 15. `CPU_SATURATION`
 

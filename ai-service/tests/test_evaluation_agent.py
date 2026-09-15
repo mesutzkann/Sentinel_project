@@ -48,7 +48,10 @@ def test_the_cases_come_from_the_reasoning_fixtures() -> None:
     """Reused rather than copied: a second ground truth would be a second right answer."""
     cases = load_cases(json_dir := _fixtures())
 
-    assert {case.id for case in cases} == {"R01", "R02", "R03", "R04", "R05", "R06", "R07"}
+    assert {case.id for case in cases} == {
+        "R01", "R02", "R03", "R04", "R05",
+        "R06", "R07", "R08", "R09", "R10",
+    }
     assert all(case.expected_category and case.service and case.query for case in cases)
 
     # The tools a good investigation reached for, taken from the recorded evidence rather than
@@ -201,6 +204,17 @@ def test_every_case_has_load_that_reaches_its_fault() -> None:
     """
     from evaluation.agent_eval import LOAD_RECIPES, LOAD_TARGETS
 
+    # Who reaches whom, for the one scenario that has to be driven from upstream. A cascade is
+    # defined by three services being slow at once, so DOWNSTREAM_LATENCY_CASCADE is driven at
+    # the gateway even though payments owns it — hitting payments directly would reproduce the
+    # latency and delete the thing being measured. Spelled out rather than allowed by loosening
+    # the assertion, because "the load has to reach the fault" is the rule this test exists for.
+    reaches = {
+        "gateway": {"gateway", "users", "orders", "payments", "notifications"},
+        "orders": {"orders", "payments", "notifications"},
+        "payments": {"payments", "notifications"},
+    }
+
     for case in load_cases(_fixtures()):
         recipe = LOAD_RECIPES.get(case.scenario)
 
@@ -210,8 +224,14 @@ def test_every_case_has_load_that_reaches_its_fault() -> None:
             assert case.service in LOAD_TARGETS[case.service]
             continue
 
-        assert str(SCENARIO_PORTS[case.service]) in recipe.url, (
-            f"{case.scenario}'s recipe has to reach {case.service}"
+        driven = next(
+            (service for service, port in SCENARIO_PORTS.items() if str(port) in recipe.url),
+            None,
+        )
+
+        assert driven is not None, f"{case.scenario}'s recipe names no known service"
+        assert case.service in reaches.get(driven, {driven}), (
+            f"{case.scenario}'s recipe drives {driven}, which never reaches {case.service}"
         )
 
 

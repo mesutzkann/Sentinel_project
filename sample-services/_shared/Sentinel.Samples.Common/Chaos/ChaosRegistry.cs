@@ -61,6 +61,39 @@ public sealed class ChaosRegistry
     }
 
     /// <summary>
+    /// The string form of <see cref="GetInt"/>, with the same fallback order.
+    /// </summary>
+    /// <remarks>
+    /// Added for scenario 14, whose parameter is a commit hash. Kept as a separate method rather
+    /// than made generic: the two callers want different failure behaviour — an unparseable
+    /// integer should fall back to a working default, while a missing hash should be reported as
+    /// the literal it is, so the log line says <c>unknown</c> instead of quietly naming something
+    /// plausible.
+    /// </remarks>
+    public string GetString(string code, string key, string fallback)
+    {
+        if (!_active.TryGetValue(code, out var parameters))
+        {
+            return fallback;
+        }
+
+        if (parameters.TryGetValue(key, out var raw) && !string.IsNullOrWhiteSpace(raw))
+        {
+            return raw;
+        }
+
+        if (_declared.TryGetValue(code, out var scenario)
+            && scenario.DefaultParameters is { } defaults
+            && defaults.TryGetValue(key, out var rawDefault)
+            && !string.IsNullOrWhiteSpace(rawDefault))
+        {
+            return rawDefault;
+        }
+
+        return fallback;
+    }
+
+    /// <summary>
     /// Idempotent. Enabling an already-enabled scenario replaces its parameters, which lets an
     /// evaluation run retune a scenario without a disable/enable cycle.
     /// </summary>

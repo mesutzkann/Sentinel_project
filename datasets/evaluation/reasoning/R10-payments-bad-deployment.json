@@ -1,0 +1,53 @@
+{
+  "id": "R10",
+  "scenario": "BAD_DEPLOYMENT_REGRESSION",
+  "expected_category": "BAD_DEPLOYMENT_REGRESSION",
+  "incident_code": "INC-00151",
+  "service": "payments",
+  "query": "payments started failing every request a few minutes ago and nothing about the traffic changed, what happened",
+  "discriminator": "Temporal correlation with a rollout rather than with load or input: the error rate steps from zero to total on one request, every currency and every amount fails alike, and a deployment line sits at the same timestamp.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/search_logs",
+      "weight": 0.9,
+      "summary": "log search for 'deployment': one warning, 'Deployment of commit a1b2c3d to payments completed at 2026-09-15T12:14:36Z', immediately before the first failure",
+      "raw": {"matches": ["Deployment of commit a1b2c3d to payments completed at 2026-09-15T12:14:36Z"]}
+    },
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_exception_statistics",
+      "weight": 0.8,
+      "summary": "exceptions in the last 30 minutes: System.ArgumentOutOfRangeException 4916, all 'Decimal can only round to between 0 and 28 digits of precision', thrown at PaymentProcessor.Authorize in PaymentProcessor.cs line 66",
+      "raw": {"System.ArgumentOutOfRangeException": 4916, "message": "Decimal can only round to between 0 and 28 digits of precision. (Parameter 'decimals')", "top_frame": "Sentinel.Samples.Payments.PaymentProcessor.Authorize(Guid orderId, Decimal amount, String currencyCode) in /src/payments/PaymentProcessor.cs:line 66"}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.8,
+      "summary": "error rate in the last 30 minutes: payments went from 0% to 100% at a single timestamp and stayed there; request rate into payments is unchanged",
+      "raw": {"before": 0.0, "after": 1.0, "request_rate_change": 0.0}
+    },
+    {
+      "source": "git",
+      "tool": "git-mcp/get_commit_diff",
+      "weight": 0.9,
+      "summary": "commit a1b2c3d 'payments: store amounts in minor units' changes the TRY conversion to round at currency.MinorUnits - 3, one place tighter than the currency's own precision",
+      "raw": {"commit": "a1b2c3d", "file": "sample-services/payments/PaymentProcessor.cs", "change": "Math.Round(amount * currency.TryRate, currency.MinorUnits) -> Math.Round(amount * currency.TryRate, currency.MinorUnits - 3)"}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.5,
+      "summary": "response time in the last 30 minutes (ms): payments mean 32 — unchanged, the failures are as fast as the successes were",
+      "raw": {"services": {"payments": {"mean": 32}}}
+    },
+    {
+      "source": "git",
+      "tool": "git-mcp/get_recent_commits",
+      "weight": 0.6,
+      "summary": "recent commits touching payments: a1b2c3d is the most recent and the only one that changed PaymentProcessor.cs",
+      "raw": {"commits": [{"sha": "a1b2c3d", "path": "sample-services/payments/PaymentProcessor.cs"}]}
+    }
+  ]
+}

@@ -12,6 +12,11 @@ builder.AddSampleDbContext<PaymentsDbContext>(PaymentsDbContext.Schema);
 
 builder.Services.AddSingleton<PaymentProcessor>();
 builder.Services.AddSingleton<ChaosBehaviour>();
+builder.Services.AddSingleton<IChaosActivationHandler>(sp => sp.GetRequiredService<ChaosBehaviour>());
+
+// Singleton because a circuit breaker with per-request state is not a circuit breaker: the
+// consecutive-failure count and the open-since stamp have to outlive the call that set them.
+builder.Services.AddSingleton<PaymentGateway>();
 
 builder.Services.AddHttpClient<NotificationsClient>(client =>
 {
@@ -53,6 +58,7 @@ app.MapPost("/payments/authorize", async (
     PaymentProcessor processor,
     ChaosBehaviour chaos,
     ChaosRegistry chaosRegistry,
+    PaymentGateway gateway,
     NotificationsClient notifications,
     ILogger<Program> logger,
     CancellationToken cancellationToken) =>
@@ -63,6 +69,18 @@ app.MapPost("/payments/authorize", async (
     {
         await chaos.ContendForBalancesAsync(db, cancellationToken);
     }
+
+    // Chaos scenario 11 (DOWNSTREAM_LATENCY_CASCADE). Before the card network call rather than
+    // after, so the whole authorisation is slow rather than one leg of it — which is what makes
+    // the callers upstream wait.
+    if (chaosRegistry.IsEnabled(ChaosCodes.DownstreamLatencyCascade))
+    {
+        await chaos.DelayAuthorizationAsync(cancellationToken);
+    }
+
+    // The outbound leg, behind its breaker. Chaos scenario 13 makes the provider refuse, which
+    // opens the breaker for real; from then on requests fail here without touching the network.
+    await gateway.AuthorizeAsync(request.OrderId, cancellationToken);
 
     var payment = processor.Authorize(request.OrderId, request.Amount, request.Currency);
 

@@ -1,0 +1,53 @@
+{
+  "id": "R09",
+  "scenario": "CIRCUIT_BREAKER_STUCK_OPEN",
+  "expected_category": "CIRCUIT_BREAKER_STUCK_OPEN",
+  "incident_code": "INC-00150",
+  "service": "payments",
+  "query": "payments is failing every authorisation but it is answering faster than when it was healthy, what is going on",
+  "discriminator": "Failures that are faster than successes: latency drops below the healthy baseline because the requests are rejected before any work happens, and the error rate ramps over the first few requests rather than stepping.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/search_logs",
+      "weight": 0.9,
+      "summary": "log search for 'circuit': 'Circuit breaker opened for payment-gateway after 5 consecutive failures', then repeated BrokenCircuitException, then 'half-open, probing with one request' followed by 'opened for payment-gateway after 6 consecutive failures'",
+      "raw": {"matches": ["Circuit breaker opened for payment-gateway after 5 consecutive failures", "Sentinel.Samples.Payments.BrokenCircuitException: The circuit for payment-gateway is open and order ... was not attempted.", "Circuit breaker for payment-gateway is half-open, probing with one request", "Circuit breaker opened for payment-gateway after 6 consecutive failures"]}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.8,
+      "summary": "error rate in the last 30 minutes: payments 100% on POST /payments/authorize; orders and gateway fail only where they call it",
+      "raw": {"services": {"payments": 1.0, "orders": 0.98, "gateway": 0.98}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.9,
+      "summary": "response time in the last 30 minutes (ms): payments mean 34 while failing, against 50 when it was healthy — the failures are faster than the successes were",
+      "raw": {"services": {"payments": {"mean_now": 34, "mean_baseline": 50}}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_failed_traces",
+      "weight": 0.7,
+      "summary": "failed traces: POST /payments/authorize ends with an error status in 4ms, with no outbound span attempted below it",
+      "raw": {"operation": "POST /payments/authorize", "duration_ms": 4, "child_spans": 0}
+    },
+    {
+      "source": "source_code",
+      "tool": "source-code-mcp/read_file",
+      "weight": 0.7,
+      "summary": "payments/PaymentGateway.cs opens the breaker after 5 consecutive failures and stays open for 10 seconds before allowing a single probe; a failed probe reopens it",
+      "raw": {"path": "sample-services/payments/PaymentGateway.cs"}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook circuit-breakers: a breaker that reopens on every probe means the dependency behind it is still refusing; restarting the caller resets the breaker but not the cause",
+      "raw": {"path": "runbooks/circuit-breakers.md"}
+    }
+  ]
+}

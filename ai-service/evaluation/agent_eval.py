@@ -211,6 +211,39 @@ LOAD_RECIPES: dict[str, LoadRecipe] = {
         ),
         needs_order=True,
     ),
+    "DOWNSTREAM_LATENCY_CASCADE": LoadRecipe(
+        # Through the gateway, not at payments. The fault is in payments, but the scenario is
+        # that three services get slow at once and only one of them is the cause — driving
+        # payments directly would reproduce the latency and delete the cascade, which is the
+        # thing being tested.
+        "http://localhost:8080/api/checkout",
+        method="POST",
+        body=_basket(2),
+        # Each request is held for three seconds by design, so the default 150 would spend the
+        # window queueing rather than measuring. Twelve keeps every request's latency its own.
+        concurrency=12,
+    ),
+    "CIRCUIT_BREAKER_STUCK_OPEN": LoadRecipe(
+        "http://localhost:8083/payments/authorize",
+        method="POST",
+        body={"order_id": None, "amount": 12.5, "currency": "TRY"},
+        needs_order=True,
+        # Low, because the signature is that failures are *fast* and the baseline they are
+        # compared against has to be a real per-request latency rather than a queue. At 150 the
+        # healthy leg would be slow enough that failing in 4 ms would look like an improvement
+        # in a way that says more about the load than the breaker.
+        concurrency=8,
+    ),
+    "BAD_DEPLOYMENT_REGRESSION": LoadRecipe(
+        "http://localhost:8083/payments/authorize",
+        method="POST",
+        body={"order_id": None, "amount": 12.5, "currency": "TRY"},
+        needs_order=True,
+        # Same reasoning as the breaker above, and the same path: these two are the pair the
+        # agent has to tell apart, so measuring them under different load would hand it a
+        # difference that is not in the fault.
+        concurrency=8,
+    ),
     "DB_N_PLUS_ONE_QUERY": LoadRecipe(
         # The detail route, not the list: the `Include` that gets dropped is on this one, and it
         # needs an order with a basket — one query per line item is one query on a one-item order.

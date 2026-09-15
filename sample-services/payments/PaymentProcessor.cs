@@ -63,7 +63,7 @@ public sealed class PaymentProcessor
             };
         }
 
-        var amountInTry = Math.Round(amount * currency!.TryRate, currency.MinorUnits);
+        var amountInTry = Math.Round(amount * currency!.TryRate, RoundingPrecision(currency));
 
         // Amounts above the ceiling are declined. Deterministic, so an evaluation run that
         // expects a decline gets one every time.
@@ -78,6 +78,32 @@ public sealed class PaymentProcessor
             ProviderReference = NewReference(),
         };
     }
+
+    /// <summary>
+    /// Decimal places used when converting to TRY.
+    /// </summary>
+    /// <remarks>
+    /// Chaos scenario 14 (BAD_DEPLOYMENT_REGRESSION) is this method's second branch, and it is
+    /// written the way the defect was written rather than as an obvious sabotage. The change it
+    /// stands for is a plausible one — "store amounts in minor units, so round one place tighter
+    /// than the currency's own precision" — and the mistake is the one that change invites:
+    /// nothing checks that the result is still a legal argument to <see cref="Math.Round(decimal,
+    /// int)"/>, which rejects anything below zero.
+    ///
+    /// Every currency in the map has two or fewer minor units, so the subtraction goes negative
+    /// for all of them and <em>every</em> authorisation throws
+    /// <see cref="ArgumentOutOfRangeException"/> from the moment it is deployed. That is the
+    /// scenario's signature: the error rate steps from zero to total at one instant, with no
+    /// dependence on input, load or elapsed time.
+    ///
+    /// It is deliberately a different exception, in a different service, from the two other
+    /// arithmetic faults in the catalogue. Scenario 6 is a DivideByZeroException in orders on a
+    /// subset of baskets; this is an ArgumentOutOfRangeException in payments on everything.
+    /// </remarks>
+    private int RoundingPrecision(CurrencyInfo currency) =>
+        _chaos.IsEnabled(ChaosCodes.BadDeploymentRegression)
+            ? currency.MinorUnits - 3
+            : currency.MinorUnits;
 
     private static string NewReference() => $"PAY-{Guid.NewGuid():N}"[..20].ToUpperInvariant();
 }
