@@ -39,7 +39,7 @@ ASP.NET Core 8 backend  ──────────  PostgreSQL 17 + pgvector
         │ HTTP + callbacks                (sentinel · rag · svc_*)
 Python FastAPI AI service
         │ MCP (Streamable HTTP)      │ HTTP
-8 MCP servers, ~40 tools            Ollama (qwen2.5)
+8 MCP servers, 43 tools             Ollama (qwen2.5)
         │
 Loki · Prometheus · Jaeger · Grafana
         ▲ OTLP
@@ -239,8 +239,10 @@ backend stores it. Both processes read one `INTERNAL_API_KEY`.
 
 ## MCP tools
 
-Everything the agent can learn about the running system, it learns through an MCP server. There
-are six, each a container, all read-only — 34 tools between them.
+Everything the agent can learn about the running system — and everything it can change about it —
+goes through an MCP server. There are eight, each a container, 43 tools between them. Six are
+read-only. The last two are not, and they are the reason Phase 10 exists: a destructive tool
+refuses to run without an approval that names one action.
 
 ```bash
 docker compose --profile core --profile samples --profile observability --profile mcp up -d --build
@@ -255,6 +257,13 @@ curl http://localhost:8000/mcp/tools | jq '.total_tools, .servers'
 | database-mcp | 7004 | PostgreSQL | 6 |
 | git-mcp | 7005 | the repository | 6 |
 | source-code-mcp | 7006 | the working tree | 5 |
+| docker-mcp | 7007 | the Docker socket, through a proxy | 6 |
+| testing-mcp | 7008 | the running services | 3 |
+
+`docker-mcp` never touches the socket directly: a proxy in front of it allows the endpoints it
+needs and refuses the rest. `testing-mcp` is the one server that *generates* traffic — it makes
+real requests to find out whether a fix worked, which is the second verification signal beside
+the error rate.
 
 Call one:
 
@@ -564,7 +573,8 @@ bugs that shipped in Phase 1 were a generated column written as an empty string 
 index whose predicate PostgreSQL rejected, and neither would fail against an in-memory provider.
 Both now have a test named after them.
 
-The MCP servers additionally have a live suite covering all 34 tools against the real backends,
+The MCP servers additionally have a live suite covering the read-only tools against the real
+backends,
 skipped unless the stack is up:
 
 ```bash
