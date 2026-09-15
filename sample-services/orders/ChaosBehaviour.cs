@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Sentinel.Samples.Common.Chaos;
+using Sentinel.Samples.Common.Telemetry;
 using Sentinel.Samples.Orders.Domain;
 using Sentinel.Samples.Orders.Persistence;
 
@@ -176,6 +179,83 @@ public sealed class ChaosBehaviour : IChaosActivationHandler
 
         return order;
     }
+
+    /// <summary>
+    /// Scenario 15 (CPU_SATURATION): runs an expensive hashing loop before serving the read.
+    /// </summary>
+    /// <remarks>
+    /// Real rather than a sleep, and that distinction is the whole scenario. <c>Task.Delay</c>
+    /// would reproduce the latency and none of the evidence: the thread would be idle, container
+    /// CPU would sit where it was, and the fault would be indistinguishable from scenario 11's
+    /// downstream wait. Repeated SHA-256 over a growing buffer burns a core for real, so
+    /// <c>get_cpu_usage</c> and <c>get_container_stats</c> both move and the discriminator in the
+    /// catalogue — slow with no database or network involvement — is something the telemetry
+    /// actually shows.
+    ///
+    /// Synchronous on purpose. Wrapping it in <c>Task.Run</c> would move the burn off the request
+    /// thread and let the thread pool absorb it, which is the opposite of saturation: latency
+    /// would stay flat until the pool ran out and then collapse all at once.
+    ///
+    /// The span is what makes the trace readable. Without it the endpoint is simply slow with no
+    /// child spans, and <c>get_slowest_spans</c> answers with the operation the investigation
+    /// already knew about.
+    /// </remarks>
+    public void BurnCpu()
+    {
+        var iterations = _chaos.GetInt(ChaosCodes.CpuSaturation, "iterations", 150_000);
+
+        using var activity = SampleActivity.StartInternal("orders.pricing.recalculate");
+        activity?.SetTag("chaos.code", ChaosCodes.CpuSaturation);
+        activity?.SetTag("compute.iterations", iterations);
+
+        var buffer = Encoding.UTF8.GetBytes("order-pricing-recalculation");
+
+        for (var i = 0; i < iterations; i++)
+        {
+            buffer = SHA256.HashData(buffer);
+        }
+
+        // Kept so the loop cannot be optimised away, and so the span carries evidence that the
+        // work was done rather than skipped.
+        activity?.SetTag("compute.digest", Convert.ToHexString(buffer.AsSpan(0, 4)));
+    }
+
+    /// <summary>
+    /// Scenario 6 (DIVIDE_BY_ZERO_EDGE_CASE): prices an order through a per-unit discount that
+    /// divides by the line's quantity.
+    /// </summary>
+    /// <remarks>
+    /// The healthy path rejects a zero quantity in validation, which is why this scenario's fix
+    /// in the catalogue is "validate quantity" — enabling it removes that guard, exactly as
+    /// scenario 4 removes an <c>Include</c>. Nothing here is a thrown exception standing in for
+    /// a bug: <c>decimal</c> division by zero throws <see cref="DivideByZeroException"/> on its
+    /// own, from the arithmetic, with the stack naming this file and this line.
+    ///
+    /// The discriminator is that the errors are <em>rare and input-correlated</em>: an order
+    /// whose lines all have a quantity prices normally however much load there is, and only a
+    /// basket containing a zero-quantity line throws. That is what separates it from scenario 5,
+    /// where a subset of requests fails on an unmapped currency, and from anything driven by
+    /// concurrency or elapsed time.
+    /// </remarks>
+    public static decimal PriceWithPerUnitDiscount(Order order)
+    {
+        var total = 0m;
+
+        foreach (var item in order.Items)
+        {
+            // A campaign discount spread across the units of the line. On a line with no units
+            // there is nothing to spread it across, and the division says so.
+            var discountPerUnit = CampaignDiscount(item) / item.Quantity;
+
+            total += item.LineTotal - (discountPerUnit * item.Quantity);
+        }
+
+        return total;
+    }
+
+    /// <summary>The line's share of the basket campaign. Never zero, so the divisor is what fails.</summary>
+    private static decimal CampaignDiscount(OrderItem item) =>
+        decimal.Round(item.UnitPrice * 0.1m, 2);
 
     public bool IsEnabled(string code) => _chaos.IsEnabled(code);
 

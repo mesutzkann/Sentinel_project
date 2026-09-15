@@ -48,7 +48,7 @@ def test_the_cases_come_from_the_reasoning_fixtures() -> None:
     """Reused rather than copied: a second ground truth would be a second right answer."""
     cases = load_cases(json_dir := _fixtures())
 
-    assert {case.id for case in cases} == {"R01", "R02", "R03", "R04", "R05"}
+    assert {case.id for case in cases} == {"R01", "R02", "R03", "R04", "R05", "R06", "R07"}
     assert all(case.expected_category and case.service and case.query for case in cases)
 
     # The tools a good investigation reached for, taken from the recorded evidence rather than

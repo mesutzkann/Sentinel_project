@@ -1,0 +1,53 @@
+{
+  "id": "R06",
+  "scenario": "DIVIDE_BY_ZERO_EDGE_CASE",
+  "expected_category": "DIVIDE_BY_ZERO_EDGE_CASE",
+  "incident_code": "INC-00147",
+  "service": "orders",
+  "query": "a small number of checkouts are failing with a 500 while most go through, what is wrong",
+  "discriminator": "Rare errors that follow an input rather than load or time: the same basket fails every time and every other basket succeeds, with latency unchanged.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_exception_statistics",
+      "weight": 0.9,
+      "summary": "exceptions in the last 30 minutes: System.DivideByZeroException 74, all from orders, thrown at ChaosBehaviour.PriceWithPerUnitDiscount(Order) in ChaosBehaviour.cs line 248",
+      "raw": {"System.DivideByZeroException": 74, "service": "orders", "top_frame": "Sentinel.Samples.Orders.ChaosBehaviour.PriceWithPerUnitDiscount(Order order) in /src/orders/ChaosBehaviour.cs:line 248"}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.7,
+      "summary": "error rate in the last 30 minutes: orders 9.8% on POST /orders, 0% on every other route; other services 0%",
+      "raw": {"services": {"orders": {"POST /orders": 0.098, "GET /orders": 0.0}}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.5,
+      "summary": "response time in the last 30 minutes (ms): orders p50=41 p95=88 p99=120 — unchanged from the preceding day",
+      "raw": {"services": {"orders": {"p50": 41, "p95": 88, "p99": 120}}}
+    },
+    {
+      "source": "source_code",
+      "tool": "source-code-mcp/read_file",
+      "weight": 0.9,
+      "summary": "orders/ChaosBehaviour.cs prices each line as CampaignDiscount(item) / item.Quantity, and POST /orders has no check rejecting a quantity below one",
+      "raw": {"path": "sample-services/orders/ChaosBehaviour.cs", "line": 248}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_failed_traces",
+      "weight": 0.6,
+      "summary": "failed traces: 74 in the last 30 minutes, all on POST /orders, each ending in error after 30-45ms with no downstream span attempted",
+      "raw": {"found": 74, "operation": "POST /orders"}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook input-validation: request payloads are validated at the endpoint before any pricing or persistence runs; a quantity is required to be one or more",
+      "raw": {"path": "runbooks/input-validation.md"}
+    }
+  ]
+}

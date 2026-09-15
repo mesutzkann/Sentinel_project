@@ -149,7 +149,44 @@ class LoadRecipe:
 #: rather than guessed: `payments/Program.cs` contends for balances before writing a payment,
 #: `orders/Program.cs` drops the `Include` on `GET /orders/{id}`, and `PaymentProcessor.cs`
 #: throws for any currency outside `{TRY, USD, EUR}`.
+def _basket(quantity: int) -> dict[str, Any]:
+    """One checkout for a single line at ``quantity``, in the shape ``POST /orders`` expects."""
+    return {
+        "user_id": DEMO_USER,
+        "currency": "TRY",
+        "items": [
+            {"product_name": "Chaos Widget", "quantity": quantity, "unit_price": 19.9},
+        ],
+    }
+
+
+#: One checkout in ten carries a zero-quantity line; the other nine are ordinary baskets.
+#:
+#: The ratio is the scenario rather than a detail of the load. Scenario 6's discriminator is that
+#: the errors are *rare* and follow an input — the catalogue says the error rate rises by a few
+#: percent — and that is what separates it from scenario 5, where a third of requests fail on an
+#: unmapped currency. Sending the bad basket on every request would make the two
+#: indistinguishable, and would repeat the mistake that made the null-reference scenario read as
+#: a total outage.
+_ZERO_QUANTITY_VARIANTS: tuple[dict[str, Any], ...] = tuple(
+    _basket(0) if i == 0 else _basket(i) for i in range(10)
+)
+
+
 LOAD_RECIPES: dict[str, LoadRecipe] = {
+    "DIVIDE_BY_ZERO_EDGE_CASE": LoadRecipe(
+        # The write path, because the defect is in pricing. `GET /orders` never prices anything,
+        # so the owning service's list endpoint would drive this scenario without ever reaching
+        # the division.
+        "http://localhost:8082/orders",
+        method="POST",
+        body_variants=_ZERO_QUANTITY_VARIANTS,
+        # Light, because each checkout also authorises a payment and the signature here is an
+        # error rate rather than a latency or a throughput. Saturating the path would add
+        # queueing to a fault that has nothing to do with load, which is the opposite of the
+        # discriminator being tested.
+        concurrency=8,
+    ),
     "DB_DEADLOCK": LoadRecipe(
         "http://localhost:8083/payments/authorize",
         method="POST",
@@ -191,10 +228,6 @@ LOAD_RECIPES: dict[str, LoadRecipe] = {
         concurrency=8,
     ),
 }
-
-#: A seeded user, for the one recipe that has to create something. From the users service's own
-#: seed data.
-DEMO_USER = "33333333-3333-3333-3333-333333333333"
 
 #: Seconds of traffic before and after the fault is introduced. The "before" matters as much as
 #: the "after" — a metric with no healthy baseline in its window reads as a service that was

@@ -1,0 +1,53 @@
+{
+  "id": "R07",
+  "scenario": "CPU_SATURATION",
+  "expected_category": "CPU_SATURATION",
+  "incident_code": "INC-00148",
+  "service": "orders",
+  "query": "orders has got very slow but nothing is erroring, find out why",
+  "discriminator": "Slow with no database or network involvement: the time sits in an internal compute span while the query beside it returns in under a millisecond, and nothing fails.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 in the last 30 minutes",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_cpu_usage",
+      "weight": 0.9,
+      "summary": "cpu utilisation in the last 30 minutes: orders rose from 0.4% to 59% of total capacity and stayed there; users, payments, notifications and gateway all below 3%",
+      "raw": {"services": {"orders": 0.592, "payments": 0.021, "users": 0.011, "notifications": 0.009, "gateway": 0.014}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_request_rate",
+      "weight": 0.8,
+      "summary": "request rate in the last 30 minutes: orders serving 10/s against a 162/s baseline — 6% of what it was, with no drop in inbound traffic",
+      "raw": {"services": {"orders": {"current": 10.0, "baseline": 161.8}}}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_slowest_spans",
+      "weight": 0.9,
+      "summary": "slowest spans: 10 in the last 30 minutes — GET /orders takes 1209ms of which an internal 'orders.pricing.recalculate' span holds 1207ms, while the Npgsql span in the same trace returns in 0-1ms",
+      "raw": {"found": 10, "slowest": {"operation": "orders.pricing.recalculate", "duration_ms": 1207, "parent": "GET /orders", "parent_duration_ms": 1209, "sibling_db_span_ms": 1}}
+    },
+    {
+      "source": "docker",
+      "tool": "docker-mcp/get_container_stats",
+      "weight": 0.7,
+      "summary": "container stats: sentinel-orders cpu high and sustained, memory 155MiB of 320MiB and flat, no restarts",
+      "raw": {"container": "sentinel-orders", "memory_mib": 155, "memory_limit_mib": 320, "restarts": 0}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "architecture orders: listing orders reads an indexed query and does no pricing work; pricing runs on checkout, not on reads",
+      "raw": {"path": "services/orders.md"}
+    }
+  ]
+}

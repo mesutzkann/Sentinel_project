@@ -85,6 +85,10 @@ public static class TelemetryDefaults
                 // extension of the same name. Scenario 2 (one slow query) and scenario 4 (fifty
                 // fast ones) are indistinguishable without a span per statement.
                 .AddSource("Npgsql")
+                // The services' own spans, for work that is neither a query nor a call. Without
+                // it scenario 15 is a slow endpoint with nothing underneath it, and the trace
+                // cannot say that the time went into compute.
+                .AddSource(SampleActivity.Name)
                 .AddOtlpExporter())
             .WithMetrics(metrics => metrics
                 .SetResourceBuilder(resource)

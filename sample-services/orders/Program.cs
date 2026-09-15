@@ -35,6 +35,14 @@ app.MapGet("/orders", async (
 {
     var take = Math.Clamp(limit, 1, 200);
 
+    // Chaos scenario 15 (CPU_SATURATION). Before the read rather than instead of it: the point
+    // is that the database work is untouched and still fast, so the trace shows the time sitting
+    // in a compute span beside a healthy query rather than in the query.
+    if (chaos.IsEnabled(ChaosCodes.CpuSaturation))
+    {
+        chaos.BurnCpu();
+    }
+
     // Chaos scenario 2 (DB_SLOW_QUERY_MISSING_INDEX). The healthy path below stays on its
     // indexes over the same table, which is what makes the contrast measurable.
     if (chaos.IsEnabled(ChaosCodes.DbSlowQueryMissingIndex))
@@ -85,6 +93,7 @@ app.MapGet("/orders/{id:guid}", async (
 app.MapPost("/orders", async (
     CreateOrderRequest request,
     OrdersDbContext db,
+    ChaosBehaviour chaos,
     PaymentsClient payments,
     ILogger<Program> logger,
     CancellationToken cancellationToken) =>
@@ -92,6 +101,15 @@ app.MapPost("/orders", async (
     if (request.Items is null || request.Items.Count == 0)
     {
         return Results.BadRequest(new { message = "An order needs at least one item." });
+    }
+
+    // Chaos scenario 6 (DIVIDE_BY_ZERO_EDGE_CASE) removes this guard, which is the defect: the
+    // pricing below divides a campaign discount by the line's quantity. Rejecting the input is
+    // the catalogue's fix for the scenario, so the healthy path is the fixed one.
+    if (!chaos.IsEnabled(ChaosCodes.DivideByZeroEdgeCase)
+        && request.Items.Any(i => i.Quantity < 1))
+    {
+        return Results.BadRequest(new { message = "Every item needs a quantity of at least one." });
     }
 
     var order = new Order
@@ -108,7 +126,11 @@ app.MapPost("/orders", async (
             .ToList(),
     };
 
-    order.TotalAmount = order.Items.Sum(i => i.LineTotal);
+    // Same scenario 6. The discounted pricing is what actually divides; with the scenario off it
+    // is never reached, so the healthy path keeps the plain sum it always had.
+    order.TotalAmount = chaos.IsEnabled(ChaosCodes.DivideByZeroEdgeCase)
+        ? ChaosBehaviour.PriceWithPerUnitDiscount(order)
+        : order.Items.Sum(i => i.LineTotal);
 
     db.Orders.Add(order);
     await db.SaveChangesAsync(cancellationToken);

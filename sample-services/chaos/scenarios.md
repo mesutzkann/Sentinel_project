@@ -23,13 +23,14 @@ than guess it:
 
 ## Implementation status
 
-Scenarios 1–5 have their behaviour implemented and verified end to end against the observability
-stack. The remaining ten are declared — they appear in `GET /chaos` and can be enabled — but
-enabling them does not yet change behaviour; that lands in the phases that need them.
+Implemented scenarios have their behaviour written and verified end to end against the running
+observability stack — enabled, driven with load, and the signature in this catalogue read back
+out of Prometheus, Loki and Jaeger. The rest are declared: they appear in `GET /chaos` and can be
+enabled, but enabling them does not yet change behaviour.
 
-| Implemented | 1, 2, 3, 4, 5 |
+| Implemented | 1, 2, 3, 4, 5, 6, 15 |
 |---|---|
-| Declared only | 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 |
+| Declared only | 7, 8, 9, 10, 11, 12, 13, 14 |
 
 ## Signal legend
 
@@ -120,12 +121,19 @@ enabling them does not yet change behaviour; that lands in the phases that need 
 | | |
 |---|---|
 | Service | orders |
-| Trigger | Discount-per-item calculation divides by item count; quantity 0 is accepted |
-| **L** | `System.DivideByZeroException`, low volume |
-| **M** | Error rate rises only slightly — a few percent |
-| Discriminator | **Rare** errors correlated with a specific input, not with load or time |
+| Trigger | The quantity guard on `POST /orders` is removed, and pricing divides a campaign discount by the line's quantity |
+| **L** | `System.DivideByZeroException: Attempted to divide by zero`, stack naming `ChaosBehaviour.cs` and a line |
+| **M** | Error rate rises only slightly — one checkout in ten in the load recipe |
+| **T** | Failed spans on `POST /orders` only; latency unchanged |
+| **C** | `read_file` shows pricing dividing by `item.Quantity` with nothing rejecting zero |
+| Discriminator | **Rare** errors correlated with a specific input, not with load or time — the same basket fails every time and every other basket succeeds |
 | Expected tools | `get_exception_statistics`, `search_code`, `read_file` |
 | Fix | `apply_patch` — validate quantity |
+
+The healthy path is the *fixed* path: it rejects a zero quantity with a 400 before pricing runs,
+which is why enabling the scenario removes a guard rather than adding a throw. Nothing here is a
+synthetic exception — `decimal` division by zero raises on its own, from the arithmetic, so the
+stack trace names the real file and line the way a production defect would.
 
 ### 7. `MEMORY_LEAK`
 
@@ -248,14 +256,23 @@ enabling them does not yet change behaviour; that lands in the phases that need 
 | | |
 |---|---|
 | Service | orders |
-| Trigger | An expensive hashing loop runs on every request |
+| Trigger | Repeated SHA-256 over a growing buffer, 150k rounds on every `GET /orders` |
 | **L** | Nothing |
-| **M** | CPU pinned above 90%; latency rises with load; error rate flat until saturation |
-| **T** | Time is spent in an internal compute span, **not** in DB or HTTP spans |
+| **M** | `process_cpu_utilization_ratio` climbs from ~0.4% to ~59%; throughput falls to 6% of baseline; latency 24x; **error rate flat** |
+| **T** | `orders.pricing.recalculate` holds 1207 ms of a 1209 ms request while the Npgsql span is 0–1 ms |
 | **K** | `get_container_stats` confirms CPU; memory normal |
 | Discriminator | Slow with **no** DB or network involvement — pure compute |
 | Expected tools | `get_cpu_usage`, `get_container_stats`, `get_slowest_spans` |
 | Fix | `apply_patch` — cache or remove the hot loop |
+
+The CPU figure is measured rather than aspirational, and the number is smaller than it looks.
+`process.cpu.utilization` is normalised by `Environment.ProcessorCount`, so on the 16-core host
+this was measured on, 59% is roughly nine and a half cores fully busy — the process is CPU-bound
+and throughput has collapsed sixteen-fold. It does not reach 90% because ASP.NET Core grows its
+thread pool by hill-climbing rather than handing 150 CPU-bound requests fifteen threads at once,
+which is also what a real service does. **The signal to read is the collapse beside a 0 ms
+database span, not the absolute percentage**, which depends on the core count of whatever
+machine the stack is running on.
 
 ---
 
