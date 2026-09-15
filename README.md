@@ -543,7 +543,7 @@ evidence for a design decision rather than just a discarded idea.
 ## Tests
 
 ```bash
-dotnet test backend/Sentinel.sln              # 36 unit, 51 integration (Testcontainers)
+dotnet test backend/Sentinel.sln              # 46 unit, 51 integration (Testcontainers)
 cd frontend && npm test                       # 47 component tests
 cd mcp-servers && pytest                      # 87 unit (34 live tests skip without the stack)
 cd ai-service && pytest                       # 641, of which 23 need PostgreSQL

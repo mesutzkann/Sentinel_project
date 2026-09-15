@@ -12,6 +12,12 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Before anything reads configuration. The repository's .env is the one file that configures the
+// whole stack, and until this existed the backend was the only process that ignored it — so
+// moving PostgreSQL off a taken 5432, which .env.example tells you to do, moved everything except
+// the backend.
+builder.AddRepositoryDotEnv();
+
 // Structured logging: these events reach Loki through the OTel collector, and the agent reads
 // the platform's own logs the same way it reads a service's.
 builder.Host.UseSerilog((context, configuration) => configuration

@@ -6,6 +6,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sentinel.Infrastructure\Sentinel.Infrastructure.csproj" />
+    <!-- For the .env reader, which is API-layer configuration plumbing and fails silently
+         when it is wrong. -->
+    <ProjectReference Include="..\..\src\Sentinel.Api\Sentinel.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>
