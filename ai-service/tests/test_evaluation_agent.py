@@ -49,8 +49,8 @@ def test_the_cases_come_from_the_reasoning_fixtures() -> None:
     cases = load_cases(json_dir := _fixtures())
 
     assert {case.id for case in cases} == {
-        "R01", "R02", "R03", "R04", "R05",
-        "R06", "R07", "R08", "R09", "R10",
+        "R01", "R02", "R03", "R04", "R05", "R06", "R07",
+        "R08", "R09", "R10", "R11", "R12", "R13",
     }
     assert all(case.expected_category and case.service and case.query for case in cases)
 

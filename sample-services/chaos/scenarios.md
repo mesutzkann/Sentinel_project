@@ -28,9 +28,9 @@ observability stack — enabled, driven with load, and the signature in this cat
 out of Prometheus, Loki and Jaeger. The rest are declared: they appear in `GET /chaos` and can be
 enabled, but enabling them does not yet change behaviour.
 
-| Implemented | 1, 2, 3, 4, 5, 6, 11, 13, 14, 15 |
+| Implemented | 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 15 |
 |---|---|
-| Declared only | 7, 8, 9, 10, 12 |
+| Declared only | 8, 10 |
 
 ## Signal legend
 
@@ -140,13 +140,23 @@ stack trace names the real file and line the way a production defect would.
 | | |
 |---|---|
 | Service | notifications |
-| Trigger | Every delivered notification is appended to a `static List` that is never drained |
-| **L** | Silent for a long time, then `OutOfMemoryException` |
-| **M** | Working-set bytes climb **monotonically**; gen-2 GC count climbs; latency creeps up |
-| **K** | `get_container_stats` confirms rising memory |
-| Discriminator | The only scenario where a metric rises *monotonically over time* rather than stepping |
+| Trigger | Every delivered notification is appended to a list that is never drained, 2 KiB per record |
+| **L** | Silent throughout. Nothing is logged, and nothing fails |
+| **M** | Working set climbs **monotonically**: 51 MiB to 171 MiB over a 75s window, 10k deliveries, zero errors |
+| **K** | `get_container_stats` confirms rising memory against a 320 MiB limit |
+| Discriminator | The only scenario where a metric rises *monotonically over time* rather than stepping, spiking or collapsing |
 | Expected tools | `get_memory_usage`, `get_container_stats`, `search_code` |
 | Fix | `restart_container` (mitigation) plus `apply_patch` (real fix) |
+
+The window deliberately stops short of the `OutOfMemoryException` the catalogue's description
+ends with. That ending is what a long run reaches; inside a benchmark it would mean the container
+is OOM-killed mid-case and the *next* case measures a service that just restarted. 149 MiB of
+headroom is the margin that keeps the fault from being inherited.
+
+**Measure this one with `docker stats`, not with a Prometheus maximum.** A container that has been
+rebuilt leaves its previous series behind in the collector, and `topk(1)` over them reported a
+plateau of 268 MiB that belonged to an instance which no longer existed — twice, for two
+different payload sizes, which is what gave it away.
 
 ---
 
@@ -170,13 +180,23 @@ stack trace names the real file and line the way a production defect would.
 | | |
 |---|---|
 | Service | notifications |
-| Trigger | DB host env var points at a non-existent host |
-| **L** | `Npgsql.NpgsqlException: Failed to connect` immediately and consistently |
-| **M** | Error rate 100% for DB-backed endpoints; health endpoint degraded |
-| **D** | `get_database_health` is fine — the database itself is healthy |
-| Discriminator | **100%** failure of one service while the database is provably healthy |
+| Trigger | The connection string's `Host` becomes a name that does not resolve |
+| **L** | `An error occurred using the connection to database 'sentinel' on server 'tcp://postgres-typo:5432'` — the wrong host is *in the log*, consistently |
+| **M** | Error rate 100% on every database-backed endpoint; `/health/ready` returns 503 |
+| **D** | `get_database_health` is fine — PostgreSQL is accepting connections throughout |
+| Discriminator | **100%** failure of one service while the database is provably healthy, and no other service is affected |
 | Expected tools | `get_container_logs`, `get_database_health`, `get_service_logs` |
 | Fix | `update_env_and_restart` — correct the connection string |
+
+Applied to the connection string rather than to a request handler, beside scenario 1, because
+that is what it is. The DbContext is scoped, so it takes effect on the next request without a
+restart — a misconfiguration arriving under a running deployment, which is how this happens.
+
+Each failure costs the **3 second connect timeout** rather than being instant: the name does not
+resolve, and Docker's resolver takes the timeout rather than answering NXDOMAIN. That is worth
+knowing because it is the difference between a host that is wrong and a host that is merely
+refusing — the second fails in milliseconds. The timeout is set down from Npgsql's 15 second
+default, or a single request would outlive the benchmark's whole window.
 
 ### 10. `RETRY_STORM`
 
@@ -224,14 +244,26 @@ by whether a core is busy.
 
 | | |
 |---|---|
-| Service | notifications |
-| Trigger | The stub SMTP/webhook dependency returns `503` |
-| **L** | `503 Service Unavailable` from an **external** host, plus retry lines |
+| Service | notifications (victim of `delivery-provider`) |
+| Trigger | The delivery provider is told to refuse, and answers `503` with a `Retry-After` |
+| **L** | `The delivery provider answered 503 ServiceUnavailable`, three attempts per delivery, each logged |
 | **M** | Only notifications is affected; orders and payments are clean |
-| **T** | Failed spans terminate at an external span, not an internal one |
+| **T** | `POST /notifications` 216 ms ending 502, with **three sibling client spans** to `peer=delivery-provider` each 503 and each with nothing below it; the Npgsql span in the same trace is healthy |
 | Discriminator | The failing span is **outside** the service boundary |
 | Expected tools | `get_recent_errors`, `get_failed_traces`, `get_service_dependencies` |
 | Fix | Circuit breaker plus store-and-forward queue (`apply_patch`) |
+
+This is the only scenario with a process of its own. `delivery-provider` is a sixth container and
+is **deliberately not instrumented** — no OpenTelemetry, no shared project, no telemetry of any
+kind. That absence is the scenario: an instrumented provider would appear in Jaeger as another
+service and the failure would look like an internal dependency, which is scenario 11's shape. Not
+being there is what makes the failed span terminate at the boundary. `GET /api/services` in
+Jaeger lists five services while this is failing, and the provider is not among them.
+
+Notifications does not simulate the 503. It makes the same call it always makes; the provider
+genuinely refuses, because enabling the scenario tells it to through a control endpoint that is
+not on the delivery path. Disabling tells it to stop, through `OnDisabledAsync` — without that,
+the provider would still be down while the next case measured a healthy baseline against it.
 
 ### 13. `CIRCUIT_BREAKER_STUCK_OPEN`
 

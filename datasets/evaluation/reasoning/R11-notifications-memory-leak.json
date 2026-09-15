@@ -1,0 +1,53 @@
+{
+  "id": "R11",
+  "scenario": "MEMORY_LEAK",
+  "expected_category": "MEMORY_LEAK",
+  "incident_code": "INC-00152",
+  "service": "notifications",
+  "query": "notifications memory has been climbing all afternoon and it has not come back down, what is holding it",
+  "discriminator": "A metric that rises monotonically rather than stepping or spiking: memory only ever goes up, nothing fails, nothing is logged, and the gen-2 collection count rises with it because none of what is held can be collected.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.4,
+      "summary": "recent errors: 0 in the last 30 minutes — notifications has logged nothing unusual at all",
+      "raw": {"found": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_memory_usage",
+      "weight": 0.9,
+      "summary": "working set for notifications over the last 30 minutes: 51 MiB rising steadily to 171 MiB with no fall at any point; the other four services are flat",
+      "raw": {"services": {"notifications": {"start_mib": 51, "end_mib": 171, "monotonic": true}, "orders": {"flat": true}, "payments": {"flat": true}}}
+    },
+    {
+      "source": "docker",
+      "tool": "docker-mcp/get_container_stats",
+      "weight": 0.8,
+      "summary": "container stats: sentinel-notifications at 171 MiB of a 320 MiB limit and still rising; no restarts, cpu normal",
+      "raw": {"container": "sentinel-notifications", "memory_mib": 171, "memory_limit_mib": 320, "restarts": 0}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.5,
+      "summary": "error rate in the last 30 minutes: 0% — 10,846 notifications delivered and not one failed",
+      "raw": {"services": {"notifications": 0.0}, "delivered": 10846}
+    },
+    {
+      "source": "source_code",
+      "tool": "source-code-mcp/search_code",
+      "weight": 0.8,
+      "summary": "notifications/ChaosBehaviour.cs keeps a ConcurrentBag of delivery records with a byte payload each; the only writes are Add, and nothing removes an entry",
+      "raw": {"path": "sample-services/notifications/ChaosBehaviour.cs", "symbol": "_history"}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook memory: a working set that rises and never falls across a GC is retention, not load; restarting frees it and does not fix it",
+      "raw": {"path": "runbooks/memory.md"}
+    }
+  ]
+}

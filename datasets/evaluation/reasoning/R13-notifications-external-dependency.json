@@ -1,0 +1,53 @@
+{
+  "id": "R13",
+  "scenario": "EXTERNAL_DEPENDENCY_UNAVAILABLE",
+  "expected_category": "EXTERNAL_DEPENDENCY_UNAVAILABLE",
+  "incident_code": "INC-00154",
+  "service": "notifications",
+  "query": "notifications is returning 502 on every send but its database is fine, where is it failing",
+  "discriminator": "The failing span is outside the service boundary: the trace ends at outgoing client spans to a host that is not one of our services and has no spans of its own, while the database span in the same trace is healthy.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.9,
+      "summary": "recent errors: 'The delivery provider answered 503 ServiceUnavailable' repeated three times per notification, each preceded by a retry warning naming attempt 1, 2 and 3 of 3",
+      "raw": {"message": "The delivery provider answered 503 ServiceUnavailable", "attempts_per_delivery": 3}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_failed_traces",
+      "weight": 0.9,
+      "summary": "failed traces: POST /notifications 216ms ending 502, containing three sibling client spans to peer 'delivery-provider' each returning 503 with no child spans below them; the Npgsql span in the same trace succeeds in 5ms",
+      "raw": {"operation": "POST /notifications", "duration_ms": 216, "status": 502, "client_spans": [{"peer": "delivery-provider", "status": 503}, {"peer": "delivery-provider", "status": 503}, {"peer": "delivery-provider", "status": 503}], "db_span_ms": 5}
+    },
+    {
+      "source": "traces",
+      "tool": "traces-mcp/get_service_dependencies",
+      "weight": 0.8,
+      "summary": "service dependencies: Jaeger knows five services — gateway, users, orders, payments, notifications. The host notifications is failing against is not one of them and reports no spans of its own",
+      "raw": {"known_services": ["gateway", "users", "orders", "payments", "notifications"], "failing_peer": "delivery-provider", "instrumented": false}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.7,
+      "summary": "error rate in the last 30 minutes: notifications 100%; orders, payments, users and gateway all 0%",
+      "raw": {"services": {"notifications": 1.0, "orders": 0.0, "payments": 0.0, "gateway": 0.0}}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_database_health",
+      "weight": 0.5,
+      "summary": "database health: accepting connections, nothing unusual — the failure is not on the data path",
+      "raw": {"accepting_connections": true}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "architecture notifications: deliveries go out through a third-party provider; a 5xx from it is retried three times and then the notification is marked failed",
+      "raw": {"path": "services/notifications.md"}
+    }
+  ]
+}

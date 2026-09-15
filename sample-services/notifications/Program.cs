@@ -10,7 +10,29 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddSampleServiceDefaults("notifications", NotificationsChaos.All);
 builder.AddSampleDbContext<NotificationsDbContext>(NotificationsDbContext.Schema);
 
-builder.Services.AddSingleton<DeliveryGateway>();
+// The provider's base address. One variable for both clients, because they are the same
+// third party: /send is its contract and /_control/availability is how the chaos scenario
+// reaches behind it.
+var providerUrl = builder.Configuration["Services:DeliveryProvider"]
+    ?? "http://localhost:8085";
+
+builder.Services.AddHttpClient<DeliveryGateway>(client =>
+{
+    client.BaseAddress = new Uri(providerUrl);
+
+    // Short, and shorter than the notifications endpoint's own patience. A provider that hangs
+    // is scenario 11's shape, not this one's; here it answers, and answers 503.
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+
+builder.Services.AddHttpClient(ChaosBehaviour.ProviderControlClient, client =>
+{
+    client.BaseAddress = new Uri(providerUrl);
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+
+builder.Services.AddSingleton<ChaosBehaviour>();
+builder.Services.AddSingleton<IChaosActivationHandler>(sp => sp.GetRequiredService<ChaosBehaviour>());
 
 var app = builder.Build();
 
@@ -34,6 +56,8 @@ app.MapPost("/notifications", async (
     SendNotificationRequest request,
     NotificationsDbContext db,
     DeliveryGateway gateway,
+    ChaosBehaviour chaos,
+    ChaosRegistry chaosRegistry,
     ILogger<Program> logger,
     CancellationToken cancellationToken) =>
 {
@@ -50,6 +74,10 @@ app.MapPost("/notifications", async (
         Body = request.Body,
     };
 
+    // Chaos scenario 7 (MEMORY_LEAK) releases what it held once the scenario is off, so the
+    // next baseline is not measured against the previous case's retained memory.
+    chaos.DrainIfDisabled();
+
     var delivery = await gateway.DeliverAsync(notification, cancellationToken);
 
     notification.Status = delivery.Succeeded ? NotificationStatus.Delivered : NotificationStatus.Failed;
@@ -57,6 +85,14 @@ app.MapPost("/notifications", async (
 
     db.Notifications.Add(notification);
     await db.SaveChangesAsync(cancellationToken);
+
+    // Chaos scenario 7 (MEMORY_LEAK). After the write, so what is retained is a record of a
+    // delivery that actually happened — the leak is an audit trail nobody drains, which is how
+    // this kind of bug reaches production in the first place.
+    if (chaosRegistry.IsEnabled(ChaosCodes.MemoryLeak))
+    {
+        chaos.Retain(notification);
+    }
 
     if (!delivery.Succeeded)
     {
@@ -94,9 +130,9 @@ internal static class NotificationsChaos
     [
         new(MemoryLeak,
             "Unbounded delivery history",
-            "Every delivered notification is appended to a static list that is never drained, so "
+            "Every delivered notification is appended to a list that is never drained, so "
             + "working-set memory climbs monotonically until the process runs out.",
-            null),
+            new Dictionary<string, string> { ["bytes_per_delivery"] = "2048" }),
 
         new(WrongConnectionString,
             "Database host misconfigured",

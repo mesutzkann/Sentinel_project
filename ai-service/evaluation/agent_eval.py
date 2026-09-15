@@ -67,6 +67,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
 from agents.build import build_machine
 from agents.context import InvestigationContext
@@ -211,6 +213,26 @@ LOAD_RECIPES: dict[str, LoadRecipe] = {
         ),
         needs_order=True,
     ),
+    "MEMORY_LEAK": LoadRecipe(
+        # The write path: the leak retains a record per *delivery*, and the list endpoint
+        # delivers nothing. `GET /notifications` would leave the fault untouched.
+        "http://localhost:8084/notifications",
+        method="POST",
+        body={"recipient": "leak@sentinel.test", "subject": "Order update", "body": "Shipped."},
+        # Enough to move a working set. At the default 8 KiB retained per delivery, a few
+        # thousand deliveries is tens of megabytes against the container's 320 MiB limit, which
+        # is a slope rather than noise.
+        concurrency=24,
+    ),
+    "EXTERNAL_DEPENDENCY_UNAVAILABLE": LoadRecipe(
+        "http://localhost:8084/notifications",
+        method="POST",
+        body={"recipient": "provider@sentinel.test", "subject": "Order update", "body": "Shipped."},
+        # Each failed delivery is three attempts with a backoff between them, so a request costs
+        # a couple of hundred milliseconds. Light load keeps that visible as the retry cost it is
+        # rather than burying it in queueing.
+        concurrency=12,
+    ),
     "DOWNSTREAM_LATENCY_CASCADE": LoadRecipe(
         # Through the gateway, not at payments. The fault is in payments, but the scenario is
         # that three services get slow at once and only one of them is the cause — driving
@@ -279,6 +301,43 @@ SETTLE_SECONDS = 20
 #: throughput, zero errors, and a service that is plainly broken. A reproduction check that only
 #: counted failures called that "did not reproduce" and skipped the case.
 COLLAPSE_SHARE = 0.6
+
+#: Where the fourth instrument reads from — the same docker-mcp the agent uses for this scenario.
+#:
+#: Prometheus was tried first and is the wrong source. `process.cpu.utilization`'s sibling gauge,
+#: `process_memory_working_set_bytes`, reported 237 MiB while `docker stats` and the container's
+#: own cgroup both said 170 MiB, and it is exported sparsely enough that a 75 second window can
+#: contain two samples. Worse, a rebuilt container leaves its dead series behind forever, so any
+#: aggregate across them mixes a live process with instances that no longer exist. The container
+#: runtime is the thing that actually knows, and it is what `get_container_stats` reads.
+DOCKER_MCP_URL = "http://localhost:7007/mcp"
+
+#: Compose names its containers after the service. The benchmark needs this to ask about one.
+CONTAINER_PREFIX = "sentinel-"
+
+#: Mebibytes of growth inside the chaos window, above which a fault counts as reproduced even
+#: though nothing failed, nothing slowed down and throughput held.
+#:
+#: **A fourth instrument, because three were not enough.** The memory leak serves every request
+#: successfully, at an unchanged latency and an unchanged rate — 2878 deliveries in 20s against a
+#: baseline of 146/s, zero failures, 165ms against 161ms. Every check this benchmark had said the
+#: fault did not reproduce, and the case would have been skipped. Its signal is not an event at
+#: all; it is a shape, and the only way to see it is to go and look at the metric.
+#:
+#: Measured across the chaos window, on the same container, four ways:
+#:
+#:   warm, scenario off:  -52.7 MiB, then -1.9 MiB   (the GC gives memory back)
+#:   warm, scenario on:   +54.9 MiB
+#:   cold, scenario off:  +61.8 MiB                  (heap warm-up, not a leak)
+#:
+#: 40 sits between the leak and the flat case with room on both sides. **It cannot separate a
+#: leak from a cold start**, and no threshold can: a freshly restarted container grows more while
+#: warming up than the leak adds. What separates them is that the container is warm by the time
+#: this is read — the baseline drive runs first, and in a full run the service has been serving
+#: since the case before. A false positive here says "reproduced" for a window in which the
+#: scenario was in fact enabled, which is the harmless direction; the failure worth avoiding is
+#: the opposite one, and that is what this constant exists for.
+GROWTH_MIB = 40
 
 #: Above this multiple of the baseline's per-request latency, the fault counts as reproduced even
 #: when nothing failed and throughput held. The n+1 scenario's own documentation says "latency
@@ -560,6 +619,30 @@ async def drive(
 # ------------------------------------------------------------------------- one case ----
 
 
+async def container_memory_mib(service: str) -> float | None:
+    """The service container's memory use right now, through docker-mcp.
+
+    Returns ``None`` when docker-mcp cannot answer, so a run against a stack without the mcp
+    profile loses this instrument rather than failing on it.
+    """
+    try:
+        async with asyncio.timeout(15):
+            async with streamable_http_client(DOCKER_MCP_URL) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    response = await session.call_tool(
+                        "get_container_stats", {"name": f"{CONTAINER_PREFIX}{service}"}
+                    )
+    except Exception as exc:  # noqa: BLE001 - an instrument that is unavailable is not a failure
+        logger.warning("could not read container memory for %s: %s", service, exc)
+        return None
+
+    payload = getattr(response, "structured_content", None) or {}
+    memory = payload.get("memory_mb")
+
+    return float(memory) if memory is not None else None
+
+
 async def run_case(
     case: AgentCase,
     config: Settings,
@@ -592,6 +675,11 @@ async def run_case(
                 print(f"  {case.id}: enabling {case.scenario}", file=sys.stderr)
                 await chaos(client, case.service, f"{case.scenario}/enable")
 
+                # The fourth instrument is a before and after rather than a window, because
+                # what it is looking for is retention: a number that went up and did not come
+                # back down. Sampled here, immediately before the fault is driven.
+                memory_before = await container_memory_mib(case.service)
+
                 served, failed, latency = await drive(client, CHAOS_SECONDS, recipe)
                 outcome.load["chaos_served"] = served
                 outcome.load["chaos_failed"] = failed
@@ -614,7 +702,23 @@ async def run_case(
                     round(latency / baseline_latency, 2) if baseline_latency else 0
                 )
 
-                if failed == 0 and not collapsed and not slower:
+                # The fourth instrument, and the only one that asks the observability stack
+                # rather than reading the requests this benchmark made. It is consulted last
+                # because it is the expensive one and because three faults in four do not need
+                # it — but the memory leak needs nothing else, since it serves every request at
+                # an unchanged rate and an unchanged latency.
+                memory_after = await container_memory_mib(case.service)
+                growth = (
+                    round(memory_after - memory_before, 1)
+                    if memory_before is not None and memory_after is not None
+                    else None
+                )
+                leaking = growth is not None and growth > GROWTH_MIB
+
+                if growth is not None:
+                    outcome.load["memory_growth_mib"] = growth
+
+                if failed == 0 and not collapsed and not slower and not leaking:
                     # The fault was enabled and nothing broke, so there is no incident to
                     # investigate. Scoring the agent here would mark it wrong for not finding
                     # something that did not happen — the same mistake as calling a healthy
@@ -622,9 +726,10 @@ async def run_case(
                     outcome.error = (
                         f"{case.scenario} was enabled and {served} requests all succeeded at "
                         f"{chaos_rate:.0f}/s against a baseline of {baseline_rate:.0f}/s, at "
-                        f"{latency:.0f}ms against {baseline_latency:.0f}ms, so the fault did not "
-                        "reproduce on this path. Either the load has to reach the endpoint the "
-                        "fault lives on, or this scenario needs its own recipe."
+                        f"{latency:.0f}ms against {baseline_latency:.0f}ms, with "
+                        f"{growth if growth is not None else 'no'} MiB of memory growth, so the "
+                        "fault did not reproduce on this path. Either the load has to reach the "
+                        "endpoint the fault lives on, or this scenario needs its own recipe."
                     )
                     print(f"  {case.id}: the fault did not reproduce", file=sys.stderr)
                     reproduced = False

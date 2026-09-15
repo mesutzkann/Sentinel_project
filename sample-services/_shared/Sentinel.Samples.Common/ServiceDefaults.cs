@@ -98,21 +98,45 @@ public static class ServiceDefaults
     }
 
     /// <summary>
-    /// Applies chaos scenario 1 (DB_CONNECTION_POOL_EXHAUSTION) to the connection string.
+    /// Applies the two chaos scenarios that are properties of the connection rather than of a
+    /// request: 1 (DB_CONNECTION_POOL_EXHAUSTION) and 9 (WRONG_CONNECTION_STRING).
     /// </summary>
     /// <remarks>
-    /// Lives in the shared layer rather than in orders because the pool belongs to the data
-    /// access setup, not to a request handler. Only orders declares the scenario, and
-    /// <see cref="ChaosRegistry.GetInt"/> returns the fallback for a scenario a service does not
-    /// own, so this is inert everywhere else.
+    /// Lives in the shared layer rather than in the services that declare them, because both
+    /// belong to the data access setup rather than to a request handler. Each is declared by
+    /// exactly one service, and <see cref="ChaosRegistry"/> returns the fallback for a scenario a
+    /// service does not own, so this is inert everywhere else.
     ///
     /// Npgsql pools are keyed by connection string, so a changed string is a different pool: the
     /// scenario genuinely exhausts one rather than pretending to. The shortened timeout is what
     /// turns exhaustion into the timeout errors the scenario is recognised by, instead of
     /// requests queueing for the 15 second default.
+    ///
+    /// The DbContext is scoped, so this runs per request and a scenario toggled between requests
+    /// takes effect on the next one. That is what makes scenario 9 a *configuration* fault rather
+    /// than a startup one — the misconfiguration arrives without a restart, exactly as it would
+    /// when an environment variable is changed under a running deployment.
     /// </remarks>
     private static string ChaosConnectionString(string connectionString, ChaosRegistry chaos)
     {
+        if (chaos.IsEnabled(ChaosCodes.WrongConnectionString))
+        {
+            // A host that does not resolve. The failure is a real Npgsql connection error raised
+            // by a real attempt to connect, so the log line, the exception type and the timing
+            // are all the ones a genuinely misconfigured deployment produces — and the database
+            // it is not reaching stays provably healthy, which is the scenario's discriminator.
+            return new NpgsqlConnectionStringBuilder(connectionString)
+            {
+                Host = chaos.GetString(ChaosCodes.WrongConnectionString, "host", "postgres-typo"),
+
+                // Without this the attempt sits on Npgsql's 15 second default and a single
+                // request outlives the benchmark's whole chaos window. The catalogue calls for
+                // failures that are immediate and consistent; a name that does not resolve fails
+                // fast on its own, and this bounds the case where DNS is slow rather than absent.
+                Timeout = 3,
+            }.ConnectionString;
+        }
+
         if (!chaos.IsEnabled(ChaosCodes.DbConnectionPoolExhaustion))
         {
             return connectionString;

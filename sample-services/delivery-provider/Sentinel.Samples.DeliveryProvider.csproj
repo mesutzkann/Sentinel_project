@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Sentinel.Samples.DeliveryProvider</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- No ProjectReference and no packages, on purpose. This process stands outside the system
+       being observed: giving it the shared project would give it OpenTelemetry, and an
+       instrumented provider would appear in Jaeger as a sixth service, which is exactly the
+       signal chaos scenario 12 depends on not existing. -->
+
+</Project>

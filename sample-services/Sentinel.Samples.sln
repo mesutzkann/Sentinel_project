@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Payments",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.Notifications", "notifications\Sentinel.Samples.Notifications.csproj", "{B7F45290-1021-4F04-880D-5797369E70DA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sentinel.Samples.DeliveryProvider", "delivery-provider\Sentinel.Samples.DeliveryProvider.csproj", "{DC232FC3-C6DC-4F3B-BA23-7C216A3DB443}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -50,6 +52,10 @@ Global
 		{B7F45290-1021-4F04-880D-5797369E70DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7F45290-1021-4F04-880D-5797369E70DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B7F45290-1021-4F04-880D-5797369E70DA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DC232FC3-C6DC-4F3B-BA23-7C216A3DB443}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DC232FC3-C6DC-4F3B-BA23-7C216A3DB443}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DC232FC3-C6DC-4F3B-BA23-7C216A3DB443}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DC232FC3-C6DC-4F3B-BA23-7C216A3DB443}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{8BF828B7-3EBE-484E-8BAF-412EEE8AEF00} = {A9032652-AB58-422E-839B-671EB2C5C0C1}

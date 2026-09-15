@@ -1,0 +1,53 @@
+{
+  "id": "R12",
+  "scenario": "WRONG_CONNECTION_STRING",
+  "expected_category": "WRONG_CONNECTION_STRING",
+  "incident_code": "INC-00153",
+  "service": "notifications",
+  "query": "notifications is failing every request against the database but the other services are fine, is the database down",
+  "discriminator": "One service fails 100% while the database is provably healthy and every other service that uses it is unaffected — so the fault is in how this service is configured to reach it, not in the database.",
+  "evidence": [
+    {
+      "source": "logs",
+      "tool": "logs-mcp/get_recent_errors",
+      "weight": 0.9,
+      "summary": "recent errors: every one is 'An error occurred using the connection to database sentinel on server tcp://postgres-typo:5432' — the host it is trying is in the message and it is not the one the other services use",
+      "raw": {"server": "tcp://postgres-typo:5432", "expected": "tcp://postgres:5432"}
+    },
+    {
+      "source": "database",
+      "tool": "database-mcp/get_database_health",
+      "weight": 0.9,
+      "summary": "database health: PostgreSQL is accepting connections, 14 of 200 connections used, no errors — the database itself is fine",
+      "raw": {"accepting_connections": true, "used": 14, "max_connections": 200}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_error_rate",
+      "weight": 0.8,
+      "summary": "error rate in the last 30 minutes: notifications 100% on every database-backed route; orders, payments and users all 0% against the same database",
+      "raw": {"services": {"notifications": 1.0, "orders": 0.0, "payments": 0.0, "users": 0.0}}
+    },
+    {
+      "source": "metrics",
+      "tool": "metrics-mcp/get_response_time",
+      "weight": 0.6,
+      "summary": "response time in the last 30 minutes (ms): notifications p50=3054 — every request costs the same 3 second connect timeout before it gives up",
+      "raw": {"services": {"notifications": {"p50": 3054}}}
+    },
+    {
+      "source": "docker",
+      "tool": "docker-mcp/get_container_logs",
+      "weight": 0.7,
+      "summary": "container logs for sentinel-notifications: /health/ready has been returning 503 since the first failure, with the database check the only one failing",
+      "raw": {"container": "sentinel-notifications", "health_ready": 503}
+    },
+    {
+      "source": "rag_document",
+      "tool": "rag/hybrid_rerank",
+      "weight": 0.5,
+      "summary": "runbook configuration: every service reaches PostgreSQL through the same ConnectionStrings__Postgres variable; a host that differs between services is a deployment mistake",
+      "raw": {"path": "runbooks/configuration.md"}
+    }
+  ]
+}

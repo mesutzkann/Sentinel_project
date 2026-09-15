@@ -178,8 +178,37 @@ services:
       context: ./sample-services
       dockerfile: notifications/Dockerfile
     container_name: sentinel-notifications
+    environment:
+      <<: *samples-env
+      Services__DeliveryProvider: http://delivery-provider:8080
     ports:
       - "127.0.0.1:${NOTIFICATIONS_PORT:-8084}:8080"
+
+  # The third party notifications delivers through, and the only process here that is *not* part
+  # of the system being observed. It exports no telemetry on purpose: chaos scenario 12 is
+  # recognised by a failure that terminates at an external span, and an instrumented provider
+  # would appear in Jaeger as a sixth service and look like an internal dependency instead.
+  #
+  # No database, so it does not depend on postgres and does not inherit samples-common.
+  delivery-provider:
+    profiles: [samples, all]
+    restart: unless-stopped
+    build:
+      context: ./sample-services
+      dockerfile: delivery-provider/Dockerfile
+    container_name: sentinel-delivery-provider
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "127.0.0.1:${DELIVERY_PROVIDER_PORT:-8085}:8080"
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
 
   # ------------------------------------------------------- observability ----
   # One ingress for every signal. Services speak OTLP to the collector and nothing else, so

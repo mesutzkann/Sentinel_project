@@ -135,7 +135,9 @@ docker compose --profile core --profile samples --profile observability up -d --
 ```
 
 The five services export traces, metrics and logs over OTLP to one collector, which fans them
-out to Jaeger, Prometheus and Loki. Grafana arrives with all three wired up and provisioned
+out to Jaeger, Prometheus and Loki. A sixth container, `delivery-provider`, deliberately exports
+nothing: it stands in for a third party, and chaos scenario 12 is recognised by a failure that
+terminates at an external span — which only holds while that process is invisible to Jaeger. Grafana arrives with all three wired up and provisioned
 dashboards — nothing is clicked together by hand.
 
 SentinelAI reports into the same three. The backend and the AI service export under the standard
@@ -163,7 +165,7 @@ curl -X POST http://localhost:8083/payments/authorize   -H 'Content-Type: applic
 curl -X POST http://localhost:8083/chaos/reset
 ```
 
-Five of the fifteen scenarios have their behaviour implemented
+Thirteen of the fifteen scenarios have their behaviour implemented
 ([the catalogue](sample-services/chaos/scenarios.md) marks which); the rest are declared and
 answer `GET /chaos`, with behaviour landing in later phases.
 
@@ -552,7 +554,8 @@ backend/          ASP.NET Core 8, Clean Architecture (Domain / Application / Inf
 frontend/         React 19, TypeScript, Vite, Tailwind, TanStack Query, Zustand
 ai-service/       Python FastAPI: local LLM, structured output, prompts, hybrid RAG (agent later)
 mcp-servers/      6 read-only MCP servers, one image, six entrypoints   (2 more in Phase 10)
-sample-services/  5 .NET microservices with chaos middleware
+sample-services/  5 .NET microservices with chaos middleware, plus an uninstrumented
+                  third-party delivery provider for scenario 12
 infrastructure/   PostgreSQL init, Prometheus, Grafana, Loki, OTel
 datasets/         The seed knowledge base and the retrieval query set; routing data in Phase 8
 docs/             Planning, ADRs, architecture notes

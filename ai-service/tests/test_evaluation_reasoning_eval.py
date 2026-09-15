@@ -44,10 +44,10 @@ def _outcome(**overrides: object) -> CaseOutcome:
 def test_the_shipped_cases_load() -> None:
     cases = load_cases(DEFAULT_CASES)
 
-    assert len(cases) == 10
+    assert len(cases) == 13
     assert {case.id for case in cases} == {
-        "R01", "R02", "R03", "R04", "R05",
-        "R06", "R07", "R08", "R09", "R10",
+        "R01", "R02", "R03", "R04", "R05", "R06", "R07",
+        "R08", "R09", "R10", "R11", "R12", "R13",
     }
 
 

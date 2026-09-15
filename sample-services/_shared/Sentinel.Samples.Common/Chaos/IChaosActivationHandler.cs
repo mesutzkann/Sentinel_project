@@ -17,4 +17,20 @@ public interface IChaosActivationHandler
 {
     /// <summary>Called after a scenario is enabled, before the endpoint responds.</summary>
     Task OnEnabledAsync(string code, CancellationToken cancellationToken);
+
+    /// <summary>Called after a scenario is disabled or reset, before the endpoint responds.</summary>
+    /// <remarks>
+    /// A default no-op, because almost nothing needs it: a scenario that is a branch in a request
+    /// handler stops happening the moment the flag is off.
+    ///
+    /// What needs it is a scenario that reached outside this process. Scenario 12 tells a
+    /// third-party provider to start refusing, and nothing about switching the flag off would
+    /// tell it to stop — the provider would still be down while the next benchmark case measured
+    /// a "healthy" baseline against it. That is the same failure the payments circuit breaker
+    /// had, where state outliving its scenario made the following case measure the previous one.
+    ///
+    /// It does not make a scenario easier for the agent to fix, because the agent has no way to
+    /// disable a chaos scenario. This is the harness putting the world back.
+    /// </remarks>
+    Task OnDisabledAsync(string code, CancellationToken cancellationToken) => Task.CompletedTask;
 }
