@@ -11,8 +11,8 @@
       "source": "logs",
       "tool": "logs-mcp/search_logs",
       "weight": 0.9,
-      "summary": "log search for 'deployment': one warning, 'Deployment of commit a1b2c3d to payments completed at 2026-09-15T12:14:36Z', immediately before the first failure",
-      "raw": {"matches": ["Deployment of commit a1b2c3d to payments completed at 2026-09-15T12:14:36Z"]}
+      "summary": "log search for 'deployment': one warning, 'Deployment of commit 7942cf7 to payments completed at 2026-09-15T12:14:36Z', immediately before the first failure",
+      "raw": {"matches": ["Deployment of commit 7942cf7 to payments completed at 2026-09-15T12:14:36Z"]}
     },
     {
       "source": "logs",
@@ -32,8 +32,8 @@
       "source": "git",
       "tool": "git-mcp/get_commit_diff",
       "weight": 0.9,
-      "summary": "commit a1b2c3d 'payments: store amounts in minor units' changes the TRY conversion to round at currency.MinorUnits - 3, one place tighter than the currency's own precision",
-      "raw": {"commit": "a1b2c3d", "file": "sample-services/payments/PaymentProcessor.cs", "change": "Math.Round(amount * currency.TryRate, currency.MinorUnits) -> Math.Round(amount * currency.TryRate, currency.MinorUnits - 3)"}
+      "summary": "commit 7942cf7 'payments three scenarios' (the commit that added RoundingPrecision) changes the TRY conversion to round at currency.MinorUnits - 3, one place tighter than the currency's own precision",
+      "raw": {"commit": "7942cf7", "file": "sample-services/payments/PaymentProcessor.cs", "change": "Math.Round(amount * currency.TryRate, currency.MinorUnits) -> Math.Round(amount * currency.TryRate, currency.MinorUnits - 3)"}
     },
     {
       "source": "metrics",
@@ -46,8 +46,8 @@
       "source": "git",
       "tool": "git-mcp/get_recent_commits",
       "weight": 0.6,
-      "summary": "recent commits touching payments: a1b2c3d is the most recent and the only one that changed PaymentProcessor.cs",
-      "raw": {"commits": [{"sha": "a1b2c3d", "path": "sample-services/payments/PaymentProcessor.cs"}]}
+      "summary": "recent commits touching payments: 7942cf7 is the most recent and the only one that changed PaymentProcessor.cs",
+      "raw": {"commits": [{"sha": "7942cf7", "path": "sample-services/payments/PaymentProcessor.cs"}]}
     }
   ]
 }

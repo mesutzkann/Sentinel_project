@@ -298,6 +298,13 @@ matching error onset could never fire. What matches the onset is the *deployment
 deployment line is what names the commit — which is also how it works in production, where the
 thing that happened at 14:32 is a rollout rather than a `git commit`.
 
+The hash lives in the scenario's `commit` parameter, verified against a running git-mcp:
+`get_commit_diff` on it returns the change. Note that it is a **twelve-file commit** and the
+defect is one method in `PaymentProcessor.cs` — the diff is not a single obvious line, which is
+what a real bad deployment looks like and is part of what this scenario tests.
+`get_file_history` on that file is the shortcut. A hash cannot be written into the commit that
+creates it, so the parameter necessarily arrives one commit later.
+
 Scenario 13 in the same service also fails fast. The two are separated by the onset shape and by
 the log lines; see the note under scenario 13.
 

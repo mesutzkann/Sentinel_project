@@ -151,7 +151,11 @@ internal static class PaymentsChaos
         new(BadDeploymentRegression,
             "Regression introduced by a deployment",
             "Marks a known bad commit as deployed now, so the error rate steps up at a timestamp "
-            + "that lines up with a commit in the repository.",
-            null),
+            + "that lines up with a deployment naming a commit in the repository.",
+            // The commit that introduced the rounding change in PaymentProcessor.RoundingPrecision.
+            // Recorded here rather than resolved at runtime because the service has no git and
+            // the repository is mounted only into git-mcp — and a hash cannot be written into the
+            // commit that creates it, so this arrives one commit later by construction.
+            new Dictionary<string, string> { ["commit"] = "7942cf7" }),
     ];
 }
