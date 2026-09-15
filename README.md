@@ -7,11 +7,12 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 12 of 12.** Everything below works: the investigation agent, the fine-tuned
-> router, incident memory, human-approved remediation, an evaluation suite whose numbers are
-> committed, and all fifteen chaos scenarios. `make demo` breaks a service for real and watches
-> the agent work out what happened. See [docs/planning.md](docs/planning.md) for the roadmap and
-> [Phase status](#phase-status) for what landed when.
+> **Status: complete, 12 of 12 phases.** The investigation agent, the fine-tuned router, incident
+> memory, human-approved remediation, an evaluation suite whose numbers are committed, and all
+> fifteen chaos scenarios. `make demo` breaks a service for real and watches the agent work out
+> what happened. [docs/architecture.md](docs/architecture.md) is the map,
+> [docs/planning.md](docs/planning.md) the roadmap, and [Phase status](#phase-status) what landed
+> when.
 
 ## What makes it interesting
 
@@ -615,7 +616,7 @@ docs/             Planning, ADRs, architecture notes
 | 9 | Incident memory | **Done** |
 | 10 | Human-in-the-loop remediation | **Done** |
 | 11 | Evaluation dashboard, all 15 chaos scenarios, self-observability | **Done** |
-| 12 | Polish, docs, CI | In progress |
+| 12 | Polish, docs, CI | **Done** |
 
 Each phase has a done criterion in [docs/planning.md](docs/planning.md) and is not left until it
 is met.
