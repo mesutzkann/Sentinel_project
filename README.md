@@ -7,11 +7,11 @@ approves, applies the fix and verifies that it worked.
 
 Everything runs locally. No hosted model, no paid API.
 
-> **Status: Phase 7 of 12.** Foundation, observability, the local LLM layer, the MCP tool
-> surface, hybrid retrieval and its reranker — and the investigation agent, which uses all of
-> them. `make demo` breaks a service for real and watches the agent work out what happened. See
-> [docs/planning.md](docs/planning.md) for the full roadmap and
-> [Phase status](#phase-status) for what works today.
+> **Status: Phase 12 of 12.** Everything below works: the investigation agent, the fine-tuned
+> router, incident memory, human-approved remediation, an evaluation suite whose numbers are
+> committed, and all fifteen chaos scenarios. `make demo` breaks a service for real and watches
+> the agent work out what happened. See [docs/planning.md](docs/planning.md) for the roadmap and
+> [Phase status](#phase-status) for what landed when.
 
 ## What makes it interesting
 
@@ -44,7 +44,14 @@ Python FastAPI AI service
 Loki · Prometheus · Jaeger · Grafana
         ▲ OTLP
 5 .NET sample microservices + chaos middleware
+        │ HTTP
+delivery-provider  (third party; uninstrumented on purpose)
 ```
+
+The backend and the AI service report into the same Loki, Prometheus and Jaeger they investigate
+the samples through — the `SentinelAI Itself` dashboard is drawn from that. `delivery-provider`
+is the one process that exports nothing, because chaos scenario 12 is recognised by a failure
+that terminates at an external span.
 
 Design decisions and their reasoning live in [docs/adr/](docs/adr/).
 
@@ -65,28 +72,40 @@ demos and benchmark runs. The model name is configuration, not code.
 
 ## Getting started
 
+Four processes and a model. In order, because each one needs the one above it:
+
 ```bash
 cp .env.example .env
 
-# PostgreSQL 17 with pgvector, pg_stat_statements and the six schemas.
+# 1. PostgreSQL 17 with pgvector, pg_stat_statements and the six schemas.
 docker compose --profile core up -d
 
-# Backend: migrates, seeds an admin and the five services, then serves on :5080
+# 2. Backend: migrates, seeds an admin and the five services, then serves on :5080
 dotnet run --project backend/src/Sentinel.Api
 
-# Frontend on :5173
+# 3. AI service on :8000. Scripts/ -> bin/ on Linux and macOS.
+ollama pull qwen2.5:3b-instruct        # ~2 GB
+cd ai-service && python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
+.venv/Scripts/uvicorn app.main:app --port 8000
+
+# 4. Frontend on :5173
 cd frontend && npm install && npm run dev
 ```
 
 Sign in with the credentials from `Seed:AdminUsername` / `Seed:AdminPassword`
 (`admin` / `Admin123!` by default). There is no signup endpoint by design.
 
-To run the sample services as well:
+The sample services are what there is to investigate, so the demo needs them too:
 
 ```bash
-docker compose --profile core --profile samples up -d --build
+docker compose --profile core --profile samples --profile observability --profile mcp up -d --build
 curl http://localhost:8080/api/services/health
 ```
+
+That is the whole setup. On a machine that already has .NET, Node, Python, Docker and Ollama it
+is about twenty minutes, most of which is the first `docker compose up --build` and the model
+pull. [The demo](#the-demo) is the next section and needs all of it running; `scripts/demo.py`
+starts nothing itself and names whatever is missing rather than failing obscurely.
 
 ## The demo
 
@@ -524,11 +543,18 @@ evidence for a design decision rather than just a discarded idea.
 ## Tests
 
 ```bash
-dotnet test backend/Sentinel.sln              # 18 unit, 28 integration (Testcontainers)
-cd frontend && npm test                       # 12 component tests
-cd mcp-servers && pytest                       # 64 unit
-cd ai-service && pytest                        # 232 unit, 23 against PostgreSQL
+dotnet test backend/Sentinel.sln              # 36 unit, 51 integration (Testcontainers)
+cd frontend && npm test                       # 47 component tests
+cd mcp-servers && pytest                      # 87 unit (34 live tests skip without the stack)
+cd ai-service && pytest                       # 641, of which 23 need PostgreSQL
 ```
+
+All of it runs on every push through [.github/workflows/ci.yml](.github/workflows/ci.yml), in
+five jobs that call the same commands. The benchmarks do not: the router needs a fine-tuned model,
+retrieval needs an embedding model and an ingested corpus, and the agent benchmark needs the whole
+estate plus a language model answering at a usable speed. A hosted runner has no GPU, and the same
+benchmark on CPU measures the runner rather than the change. Their numbers are committed under
+`datasets/evaluation/runs/` with the machine they were measured on.
 
 The integration tests run the API against a real PostgreSQL started for the run, using the same
 image and the same init scripts as compose. That is not thoroughness for its own sake: the two
@@ -576,8 +602,8 @@ docs/             Planning, ADRs, architecture notes
 | 8 | Fine-tuned router | **Done** |
 | 9 | Incident memory | **Done** |
 | 10 | Human-in-the-loop remediation | **Done** |
-| 11 | Evaluation dashboard | In progress |
-| 12 | Polish, docs, CI | |
+| 11 | Evaluation dashboard, all 15 chaos scenarios, self-observability | **Done** |
+| 12 | Polish, docs, CI | In progress |
 
 Each phase has a done criterion in [docs/planning.md](docs/planning.md) and is not left until it
 is met.

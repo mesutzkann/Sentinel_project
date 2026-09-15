@@ -1,0 +1,164 @@
+# What can be checked without a GPU.
+#
+# Five jobs, run in parallel, each owning one language boundary. They are deliberately the same
+# commands the Makefile and scripts/dev.ps1 run locally: a CI that invents its own invocation is
+# a second definition of "does this build", and the two disagree exactly once — in the pull
+# request somebody is about to merge.
+#
+# **The benchmarks are not here, and that is a decision rather than an omission.** The router
+# evaluation needs Ollama with a fine-tuned model, the RAG evaluation needs an embedding model
+# and an ingested corpus, and the agent evaluation needs the whole stack plus a language model
+# answering in a reasonable time. A hosted runner has no GPU, and the same benchmark on CPU
+# measures the runner. The numbers those produce are committed under `datasets/evaluation/runs/`
+# with the machine they were measured on, which is the honest place for a figure that depends on
+# hardware. What CI can do is prove the code that produces them still runs, which is what the
+# unit tests over `evaluation/` do.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (.NET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore backend/Sentinel.sln
+
+      # --warnaserror, matching `make build`. The projects set TreatWarningsAsErrors already;
+      # this is the belt to that braces and covers the analyzers that only run in Release.
+      - name: Build
+        run: dotnet build backend/Sentinel.sln --configuration Release --no-restore --warnaserror
+
+      # The integration tests bring their own PostgreSQL through Testcontainers, so nothing has
+      # to be started for them. That is why they are worth running here rather than being cut
+      # for needing a database.
+      - name: Test
+        run: dotnet test backend/Sentinel.sln --configuration Release --no-build --verbosity normal
+
+  samples:
+    name: sample services (.NET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build sample-services/Sentinel.Samples.sln --configuration Release --warnaserror
+
+  ai-service:
+    name: ai-service (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai-service/pyproject.toml
+
+      # Through compose rather than a service container, because compose is where this database
+      # is defined. PostgreSQL here is started with `shared_preload_libraries=pg_stat_statements`
+      # and an init script that creates the pgvector extension and six schemas; a service
+      # container cannot override the command, so it would have been a second, lesser PostgreSQL
+      # that the store tests would then have to be taught about.
+      - name: Start PostgreSQL
+        working-directory: .
+        run: |
+          docker compose --profile core up -d postgres
+          until docker exec sentinel-postgres pg_isready -U sentinel -d sentinel; do sleep 2; done
+
+      # The rerank and train extras are deliberately absent: between them they are several
+      # gigabytes of PyTorch for code the tests reach with importorskip.
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      # `ruff format` is not run. The repository is not formatted with it — 42 files would change
+      # — so a check here would fail on code nobody is touching.
+
+      - name: Test
+        run: pytest -q
+
+  mcp-servers:
+    name: mcp servers (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-servers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: mcp-servers/pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      # No stack is started for these. 34 of the tests are a live suite against real Loki,
+      # Prometheus, Jaeger and Docker, and they skip themselves when those are absent — which is
+      # the right outcome here rather than a reason to stand the whole estate up on a runner.
+      - name: Test
+        run: pytest -q
+
+  frontend:
+    name: frontend (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      # Last, because it is the slowest and the least likely to be the thing that broke.
+      - name: Build
+        run: npm run build
