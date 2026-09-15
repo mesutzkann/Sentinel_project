@@ -18,6 +18,16 @@ One Python script rather than a PowerShell one and a bash one, because this is t
 likely to be read by somebody deciding whether the project works, and two copies of it would
 drift. It starts nothing: if a service is down it says which and what to run, because owning the
 lifecycle of four processes is what `scripts/dev.ps1` and the Makefile are for.
+
+**It assumes a database that has not been left in a strange state**, and the assumption is worth
+stating because breaking it broke a run. Scenario 2 used to leave two million padding rows in
+`svc_orders.orders` after it was disabled; with them there, `get_slow_queries` returns genuinely
+slow statements and the agent concludes DB_SLOW_QUERY_MISSING_INDEX for an incident that is
+scenario 1 — which it did, at the third round, after ranking the right answer first at 0.83. The
+padding is removed on disable now. What does not clear itself is `pg_stat_statements`, which is
+cumulative by design: a run after heavy benchmarking sees slow statements that were real when
+they were recorded. `make reset` is the clean slate, and `SELECT pg_stat_statements_reset()` is
+the cheap one.
 """
 
 from __future__ import annotations

@@ -59,6 +59,82 @@ public sealed class ChaosBehaviour : IChaosActivationHandler
         await EnsurePaddingAsync(db, cancellationToken);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Removes the padding, and the reason is a demo that got the wrong answer.
+    ///
+    /// This used to leave the two million rows behind on purpose: a large table is a property of
+    /// the database rather than of the fault, and the baseline and the chaos window were then
+    /// measured against the same table. That argument is sound about scenario 2 and wrong about
+    /// everything else. The padding outlives the scenario, so <c>GET /orders</c> stays genuinely
+    /// slow afterwards and <c>get_slow_queries</c> keeps returning real slow statements to
+    /// investigations that have nothing to do with it.
+    ///
+    /// It cost a run of <c>scripts/demo.py</c>, which is scenario 1. The agent ranked
+    /// <c>Connection Pool Exhaustion</c> first at 0.83, the critic rejected it, and by the third
+    /// round it concluded <c>DB_SLOW_QUERY_MISSING_INDEX</c> — reasonably, because there really
+    /// were ten slow statements, and it said as much: *the connection pool is not the primary
+    /// cause as the connection pool is still within a reasonable usage*. Two scenarios producing
+    /// the same symptoms is what design rule 1 in the catalogue exists to prevent.
+    ///
+    /// The trade this accepts: a baseline driven before the scenario is enabled now runs against
+    /// a small table and the chaos window against a padded one, so part of the slowdown is the
+    /// row count rather than the missing index. That was already true of the first run against
+    /// any fresh database — this only makes every run the same as the first, which is what design
+    /// rule 3 asks for.
+    /// </remarks>
+    public async Task OnDisabledAsync(string code, CancellationToken cancellationToken)
+    {
+        if (code != ChaosCodes.DbSlowQueryMissingIndex)
+        {
+            return;
+        }
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<OrdersDbContext>();
+
+        await RemovePaddingAsync(db, cancellationToken);
+    }
+
+    /// <summary>
+    /// Deletes the rows <see cref="EnsurePaddingAsync"/> inserted, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// Identified by the <c>PAY-PAD-</c> reference prefix, which is written by its counterpart
+    /// and by nothing else in the system. Real orders created by load — and there can be hundreds
+    /// of thousands after a benchmark — are left alone: they are the natural residue of traffic
+    /// rather than scenario state.
+    /// </remarks>
+    private async Task RemovePaddingAsync(OrdersDbContext db, CancellationToken cancellationToken)
+    {
+        await _paddingLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var removed = await db.Database.ExecuteSqlAsync(
+                $"""
+                 DELETE FROM svc_orders.orders
+                 WHERE "PaymentReference" LIKE 'PAY-PAD-%'
+                 """,
+                cancellationToken);
+
+            if (removed > 0)
+            {
+                _logger.LogWarning(
+                    "Removed {Count} padding rows from svc_orders.orders for {ChaosCode}",
+                    removed,
+                    ChaosCodes.DbSlowQueryMissingIndex);
+            }
+
+            // So a re-enable pads again rather than assuming the table is still large.
+            _padded = false;
+        }
+        finally
+        {
+            _paddingLock.Release();
+        }
+    }
+
     /// <summary>
     /// Scenario 2 (DB_SLOW_QUERY_MISSING_INDEX): lists orders through a predicate no index can
     /// serve, over a table padded to a realistic size.
