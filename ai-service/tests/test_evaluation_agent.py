@@ -174,13 +174,26 @@ async def test_a_fault_that_did_not_reproduce_is_not_scored_as_a_wrong_answer(mo
     monkeypatch.setattr(agent_eval, "chaos", nothing)
     monkeypatch.setattr(agent_eval, "investigate", unreachable)
 
+    # A clock rather than the real one, because the duration this asserts is otherwise the
+    # machine's speed. With the load and chaos calls mocked out, what is left is two connection
+    # attempts to a docker-mcp that is not running: this workstation takes 2.5 s to refuse each
+    # one and a Linux runner refuses both instantly, so the same case measured 5 s here and
+    # under 50 ms in CI — where it rounded to 0.0 and failed. Four milliseconds is the
+    # interesting number to pin: it is a real span that one decimal place cannot represent.
+    ticks = iter([0.0])
+
+    def clock() -> float:
+        return next(ticks, 0.004)
+
+    monkeypatch.setattr(agent_eval.time, "perf_counter", clock)
+
     case = load_cases(_fixtures(), ["R01"])[0]
     result = await agent_eval.run_case(case, object(), skip_load=False, settle=0)
 
     assert result.error is not None
     assert "did not reproduce" in result.error
     assert result.load["chaos_per_second"] == result.load["baseline_per_second"]
-    assert result.duration_s > 0, "the row still records how long it took to find that out"
+    assert result.duration_s == 0.004, "the row still records how long it took to find that out"
 
     # And it is excluded from accuracy rather than counted against it.
     assert score([result]).cases == 0

@@ -776,7 +776,15 @@ async def run_case(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("could not reset chaos on %s: %s", case.service, exc)
 
-    outcome.duration_s = round(time.perf_counter() - started, 1)
+    # Milliseconds, not tenths of a second. A real case runs for a minute or two, so one decimal
+    # place looks like plenty — but a case that ends early records a real span too, and at one
+    # decimal place anything under 50 ms rounds to 0.0, which reads as "never ran" rather than
+    # "ran and finished immediately". That is not hypothetical: with the load and chaos calls
+    # mocked out, a hosted runner finishes a did-not-reproduce case inside that window and the
+    # row lost its duration, while this workstation was slow enough to stay above it. Nothing
+    # reports these digits — `mean_duration_s` is printed as whole seconds — so the precision
+    # costs nothing and keeps a measured value from being rounded out of existence.
+    outcome.duration_s = round(time.perf_counter() - started, 3)
 
     return outcome
 

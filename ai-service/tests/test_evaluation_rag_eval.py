@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from agents.postmortem import GENERATED_DIR
 from evaluation.rag_eval import (
     DEFAULT_QUERIES,
     EvalError,
@@ -188,6 +189,12 @@ def test_the_query_set_covers_every_document_in_the_corpus() -> None:
     Not a strict requirement of the metrics — it is a requirement of the query set being an
     honest sample of what the agent will ask, and it is how the last two service docs got
     queries at all.
+
+    Postmortems the agent wrote are exempt, and have to be: Phase 9 has a concluded investigation
+    write one back into the corpus, so the directory holds whatever the last demo run concluded.
+    A query set cannot label a document that does not exist until someone runs the system, and
+    without the exemption the suite passes in CI — where the directory is empty — and fails on
+    any machine the demo has been run on, which is the wrong way round.
     """
     labelled = {
         key for query in load_queries(DEFAULT_QUERIES) for key in query.relevant_documents
@@ -195,7 +202,7 @@ def test_the_query_set_covers_every_document_in_the_corpus() -> None:
     corpus = {
         path.relative_to(KNOWLEDGE_BASE).as_posix()
         for path in KNOWLEDGE_BASE.rglob("*.md")
-        if not path.name.startswith("_")
+        if not path.name.startswith("_") and path.parent != KNOWLEDGE_BASE / GENERATED_DIR
     }
 
     assert corpus - labelled == set()
