@@ -8,10 +8,11 @@ reach the threshold.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
-from agents.categories import ScenarioCategory
+from agents.categories import CATEGORY_DISCRIMINATORS, ScenarioCategory
 from agents.confidence import CONFIDENCE_THRESHOLD
 from agents.context import Hypothesis, RootCause
 from agents.nodes.additional_evidence import CollectAdditionalEvidenceNode
@@ -507,3 +508,23 @@ async def test_evidence_in_conclusion_out() -> None:
     assert kinds.count(EventType.ROOT_CAUSE) == 1
     assert kinds.count(EventType.RECOMMENDATION) == 1
     assert kinds[-1] is EventType.COMPLETED
+
+
+def test_every_code_has_a_discriminator() -> None:
+    """A code with no line saying what it is not is the shape of a measured regression.
+
+    Four hand-written rules covering only the confused pairs scored better overall and moved R14
+    off `TIMEOUT_TOO_LOW`, which had been right: defining some boundaries and not others makes
+    the defined ones more attractive and leaves everything bordering an undefended one to drift.
+    The catalogue defines all fifteen against each other, and adding a sixteenth code without a
+    line here would quietly reintroduce that.
+    """
+    for member in ScenarioCategory:
+        assert f"- {member.value}:" in CATEGORY_DISCRIMINATORS, member.value
+
+
+def test_the_discriminators_only_name_real_codes() -> None:
+    """They cross-reference each other by name, so a rename has two places to miss, not one."""
+    named = set(re.findall(r"\b[A-Z][A-Z_]{4,}\b", CATEGORY_DISCRIMINATORS))
+
+    assert named <= {member.value for member in ScenarioCategory}

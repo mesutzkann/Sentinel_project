@@ -19,6 +19,10 @@ Rules:
 - `category` must be exactly one of these codes, or null:
   {{ categories }}
   Null when none fits. Do not pick the closest one.
+  What tells each code apart from the ones it is nearest:
+{{ discriminators }}
+  Pick the code whose signature the evidence matches, not the one that is loosely true of any
+  incident. When two fit, the more specific one wins.
 - Reply with the JSON object alone: no explanation, no code fence.
 
 Incident:

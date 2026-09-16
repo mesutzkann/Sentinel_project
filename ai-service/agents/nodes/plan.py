@@ -54,6 +54,19 @@ INTENT_COLLECTORS: dict[Intent, tuple[State, ...]] = {
     Intent.METRIC_QUERY: (State.COLLECT_METRICS,),
     Intent.TRACE_QUERY: (State.COLLECT_TRACES,),
     Intent.PERFORMANCE_ANALYSIS: (
+        # Logs, although the intent is about speed rather than errors, because "why is this
+        # slow" and "why is this failing" are the same incident often enough that leaving them
+        # out decided a demo. The router reads "orders is timing out, find out why" as
+        # PERFORMANCE_ANALYSIS, and without this line the only pool fact collectable is the
+        # server-side connection count — which on scenario 1 reads 250 spare and points the
+        # wrong way, because a service exhausts its own client-side pool while the server still
+        # has room. Both the 3B and the 7B duly ruled the pool out and concluded a missing
+        # index. The thousands of `The connection pool has been exhausted` lines that settle it
+        # were never read. `scenarios.md` §1 lists `get_recent_errors` first among the expected
+        # tools and gives the log burst as the primary signature, so the plan disagreed with
+        # its own source. Checked rather than assumed: of 300 Error lines in that run, none
+        # names the scenario, so this collects evidence and not the answer.
+        State.COLLECT_LOGS,
         State.COLLECT_METRICS,
         State.COLLECT_TRACES,
         State.COLLECT_DATABASE,

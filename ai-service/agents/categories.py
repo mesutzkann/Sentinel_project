@@ -109,3 +109,61 @@ def category_or_unknown(value: str | None) -> str:
 #: Rendered into the prompts that ask for a category. One line rather than the enum's repr so
 #: that the model sees the vocabulary it is being asked to choose from and nothing else.
 CATEGORY_LIST = ", ".join(member.value for member in ScenarioCategory)
+
+
+# What tells each code apart from the ones it is confused with. The fifteen lines are the
+# ``Discriminator`` rows of ``sample-services/chaos/scenarios.md``, which is where they were
+# written and measured; scenario numbers are spelled as codes here because the model is never
+# shown the catalogue, and the one line that described what the benchmark was testing rather
+# than what the failure looks like is restated as the signal.
+#
+# **Why the codes needed this at all.** The conclusion prompt listed fifteen names and no
+# definitions, and the 15-case run on 2026-09-16 put the right cause in prose beside the wrong
+# code five times out of nine — "NullReferenceException due to Currency Code Mapping" labelled
+# BAD_DEPLOYMENT_REGRESSION, "Delivery Provider is Unavailable" labelled
+# DOWNSTREAM_LATENCY_CASCADE. Three codes took seven of the nine misses, and they are the three
+# that are loosely true of almost any incident: a defect did ship in a deployment, a slow query
+# could be missing an index, and there is always something downstream. Against a vague code that
+# is never quite wrong, a specific one that is exactly right loses.
+#
+# **Why all fifteen rather than only the confused pairs.** Four hand-written rules for the
+# measured confusions scored 0.40 → 0.47, but cost R14: describing DOWNSTREAM_LATENCY_CASCADE's
+# proper scope made it more attractive, and a case that had been right moved onto it. Defining
+# some boundaries and not others moves every case that borders an undefended one. The catalogue
+# defines all fifteen against each other, which is the property that matters.
+#
+# **This is taxonomy, not answers.** Each line says what distinguishes a code from its
+# neighbours — the same kind of statement the runbooks in the corpus already make, and the
+# reason `datasets/knowledge/runbooks/` exists. It does not say which one this incident is:
+# the model still has to match a signature to the evidence, and the same run shows it failing
+# to even when told, concluding a 503 from the delivery provider with no category at all.
+#
+# Deliberately not applied to hypotheses. Pushing categories there was measured and reverted (see
+# this module's docstring): five vague candidates spread the codes and the conclusion inherited
+# whichever won. This is one call, on one conclusion that has already been argued.
+CATEGORY_DISCRIMINATORS = """\
+- DB_CONNECTION_POOL_EXHAUSTION: latency is high and the errors are timeouts, where
+  CIRCUIT_BREAKER_STUCK_OPEN fails instantly.
+- DB_SLOW_QUERY_MISSING_INDEX: slow without errors, and the slowness sits inside a single
+  database span.
+- DB_DEADLOCK: errors are intermittent and self-recovering, never sustained.
+- DB_N_PLUS_ONE_QUERY: many fast queries, where DB_SLOW_QUERY_MISSING_INDEX is one slow one.
+- NULL_REFERENCE_EXCEPTION: fast failures on a subset of requests, latency unaffected.
+- DIVIDE_BY_ZERO_EDGE_CASE: rare errors correlated with a specific input rather than with load
+  or time — the same input fails every time and every other input succeeds.
+- MEMORY_LEAK: the only one where a metric rises monotonically over time rather than stepping,
+  spiking or collapsing.
+- TIMEOUT_TOO_LOW: the caller fails while the callee succeeds — look upstream, at the deadline.
+- WRONG_CONNECTION_STRING: 100% failure of one service while the database is provably healthy,
+  and no other service is affected.
+- RETRY_STORM: downstream load rises while upstream load does not — amplification.
+- DOWNSTREAM_LATENCY_CASCADE: a multi-service symptom with a single-service cause. Follow the
+  trace to the slow span rather than blaming the loudest service.
+- EXTERNAL_DEPENDENCY_UNAVAILABLE: the failing span is outside the service boundary.
+- CIRCUIT_BREAKER_STUCK_OPEN: fast failures. Low latency together with a high error rate is
+  unique to this one and separates it from DB_CONNECTION_POOL_EXHAUSTION and
+  DOWNSTREAM_LATENCY_CASCADE.
+- BAD_DEPLOYMENT_REGRESSION: temporal correlation is the signal — onset aligns with a
+  deployment, not with load, input or elapsed time.
+- CPU_SATURATION: slow with no database or network involvement — pure compute.\
+"""

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 
-from agents.categories import CATEGORY_LIST
+from agents.categories import CATEGORY_DISCRIMINATORS, CATEGORY_LIST
 from agents.context import InvestigationContext, RootCause
 from agents.nodes.reasoning import ReasoningNode, render_evidence, render_incident
 from agents.schemas import RootCauseStatement
@@ -64,6 +64,7 @@ class SelectRootCauseNode(ReasoningNode):
                 incident=render_incident(ctx),
                 evidence=render_evidence(ctx),
                 categories=CATEGORY_LIST,
+                discriminators=CATEGORY_DISCRIMINATORS,
                 hypothesis=(
                     f"{winner.title} [{winner.category or 'uncategorised'}] "
                     f"(score {winner.score:.2f}, evidence {winner.supporting_evidence})\n"
