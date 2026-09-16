@@ -331,5 +331,7 @@ function asNumber(value: unknown): number | null {
 }
 
 function percent(value: number | null): string {
-  return value === null ? '—' : `${(value * 100).toFixed(1)}%`;
+  // `== null`: the API omits absent numbers rather than sending null (Program.cs,
+  // WhenWritingNull), so a strict check lets `undefined` through to toFixed.
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`;
 }

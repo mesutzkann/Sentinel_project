@@ -65,13 +65,19 @@ export function DashboardPage() {
           )}
         </section>
 
+        {/*
+          This card described Phase 1 until Phase 12 had shipped, which made the front page of a
+          finished system promise an investigation agent that was already running behind it.
+        */}
         <section className="panel px-5 py-4">
-          <h2 className="mb-2 text-sm font-semibold text-slate-200">Phase 1</h2>
+          <h2 className="mb-2 text-sm font-semibold text-slate-200">What this is</h2>
           <p className="text-sm leading-relaxed text-slate-400">
-            Foundation only: services, incidents and authentication over a real database, plus
-            five sample microservices that will produce genuine failures. Observability arrives in
-            Phase 2, and the investigation agent that gives this dashboard something to narrate in
-            Phase 7.
+            Five sample microservices that fail in fifteen scripted ways, and an agent that reads
+            the logs, metrics, traces, database and prior incidents they produce — through eight
+            MCP servers — to work out which failure happened, citing the evidence for each step.
+            It is measured rather than asserted: every benchmark it is judged on is under
+            Evaluation, including the ones it does poorly at. A conclusion the evidence does not
+            support is left for a human, and anything that changes the estate needs approval.
           </p>
         </section>
       </div>

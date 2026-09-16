@@ -69,13 +69,13 @@ export function ConfidenceTerm({
       <span className="w-40 shrink-0 text-slate-400">{name.replace(/_/g, ' ')}</span>
 
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-800">
-        {value !== null && (
+        {value != null && (
           <div className="h-full rounded-full bg-accent/70" style={{ width: `${value * 100}%` }} />
         )}
       </div>
 
       <span className="w-10 shrink-0 text-right font-mono text-slate-300">
-        {value === null ? '—' : value.toFixed(2)}
+        {value == null ? '—' : value.toFixed(2)}
       </span>
       <span className="w-12 shrink-0 text-right font-mono text-slate-600">
         ×{weight.toFixed(2)}

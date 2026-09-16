@@ -81,7 +81,14 @@ export function InvestigationsPage() {
                     </td>
 
                     <td className="px-4 py-3">
-                      {investigation.confidence === null ? (
+                      {/*
+                        `== null`, not `=== null`: the API omits the key rather than sending a
+                        null, because Program.cs serialises with WhenWritingNull. A running
+                        investigation has no confidence yet, so this cell threw on `undefined`
+                        and took the whole page down with it — blank, and with no fallback UI,
+                        exactly while someone was watching a run.
+                      */}
+                      {investigation.confidence == null ? (
                         <span className="text-slate-600">—</span>
                       ) : (
                         <span
