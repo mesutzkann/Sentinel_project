@@ -48,3 +48,8 @@ Desktop.ini
 # ---- Runtime data ----
 infrastructure/**/data/
 logs/
+
+# Postmortems the agent writes back into its own corpus at runtime. The seed corpus under
+# datasets/knowledge/ is written by hand and tracked; these carry `source: generated` and are
+# whatever the last demo run happened to conclude. rag/memory.py creates the directory itself.
+datasets/knowledge/postmortems/
