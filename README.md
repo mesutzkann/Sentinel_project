@@ -402,9 +402,20 @@ in the index stops the run rather than scoring every retriever equally and myste
 and a query set with a duplicate id or an unlabelled query is rejected at load. Benchmark
 searches are not written to `rag.retrieval_logs`, which exists to diagnose the agent's searches.
 
+The same symptom arrives from the other direction, and that one is reported rather than refused.
+A concluded investigation writes its postmortem back into this corpus, so every demo run adds a
+document no query labels — it can never be counted correct, but it can take a slot from one that
+would have been. Deleting them to keep the benchmark tidy would measure a corpus nobody has, so
+the count and the list go into the run's JSON instead, and a run meant to be compared with an
+earlier one is taken against the corpus the queries were labelled for. Two runs of these same 120
+queries through this same code differ on every reranked figure for that reason alone — R@1 0.642
+to 0.617, R@3 0.956 to 0.915 — because at the second, 5 of the 33 indexed documents were the
+agent's own.
+
 ### What it says
 
-A hundred and twenty queries, k=5, on one 16 GB machine with the cross-encoder on its GPU. R is
+A hundred and twenty queries, k=5, on one 16 GB machine with the cross-encoder on its GPU,
+against the 28-document corpus alone (`datasets/evaluation/runs/20260914T145821Z`). R is
 recall over documents; S is *success* — the share of queries with a relevant document in the top
 k, which is what "how often is it right" usually means. R@1 cannot exceed **0.763** here, because
 56 of the 120 queries have two relevant documents and one result cannot be both.

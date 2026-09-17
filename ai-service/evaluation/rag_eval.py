@@ -169,6 +169,32 @@ def check_labels(queries: list[EvalQuery], indexed: set[str]) -> None:
         )
 
 
+def unlabelled_documents(queries: list[EvalQuery], indexed: set[str]) -> list[str]:
+    """Documents in the index that no query labels — the mirror of ``check_labels``.
+
+    That function catches a labelled document going missing, and its comment describes the
+    symptom: every retriever equally and mysteriously worse. The same symptom arrives from the
+    other direction and had nothing watching it. An unlabelled document can never be counted
+    correct, but it can take a slot from one that would have been — and the agent writes them,
+    because Phase 9 has a concluded investigation put its own postmortem into this corpus. Every
+    demo run adds one.
+
+    Two committed runs of the same 120 queries through the same code, `20260914T145821Z` and
+    `20260916T125538Z`, differ on every `hybrid_rerank` figure — recall@1 0.6424 to 0.6174,
+    recall@3 0.9563 to 0.9146, recall@5 0.9729 to 0.9479 — and what changed between them was the
+    corpus. At the second, 5 of the 33 indexed documents were postmortems the agent had written
+    and no query labels.
+
+    Not an error, and not something to delete: the grown corpus is the real one and growing it is
+    the point of Phase 9. What is wrong is reading two numbers measured against different corpora
+    as a trend. So this is reported and recorded rather than raised, and a run meant to be
+    compared with an earlier one is taken against the corpus the queries were labelled for.
+    """
+    labelled = {key for query in queries for key in query.relevant_documents}
+
+    return sorted(key for key in indexed if key and key not in labelled)
+
+
 async def build_retrievers(
     config: Settings,
     store: PgVectorStore,
@@ -405,15 +431,24 @@ def as_json(
     scores: list[RetrieverScores],
     queries: list[EvalQuery],
     k: int,
+    indexed: set[str] | None = None,
 ) -> dict[str, Any]:
     """The whole run, including per-query detail.
 
     Written out so that two runs can be diffed. An average that moved is a question; the query
     that stopped working is the answer, and it is not recoverable from the average.
+
+    ``corpus_documents`` and ``unlabelled_documents`` are here so that the first question about a
+    moved average — was it the retriever or was it the corpus — can be answered from the record
+    rather than guessed at.
     """
+    extra = unlabelled_documents(queries, indexed) if indexed is not None else []
+
     return {
         "k": k,
         "queries": len(queries),
+        "corpus_documents": len(indexed) if indexed is not None else None,
+        "unlabelled_documents": extra,
         "recall_at_1_ceiling": round(recall_ceiling(next(iter(outcomes.values()))), 4),
         "scores": [
             {
@@ -496,6 +531,17 @@ async def main(argv: list[str] | None = None) -> int:
         )
         check_labels(queries, indexed)
 
+        extra = unlabelled_documents(queries, indexed)
+
+        if extra:
+            print(
+                f"! {len(extra)} of {len(indexed)} indexed documents are not labelled by any "
+                f"query, so they can take a slot without ever being counted correct. Recall is "
+                f"comparable only with a run over the same corpus. First few: "
+                f"{', '.join(extra[:3])}",
+                file=sys.stderr,
+            )
+
         if unavailable:
             print(f"! hybrid_rerank skipped: {unavailable}", file=sys.stderr)
 
@@ -516,7 +562,8 @@ async def main(argv: list[str] | None = None) -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
-            json.dumps(as_json(outcomes, scores, queries, args.k), indent=2), encoding="utf-8"
+            json.dumps(as_json(outcomes, scores, queries, args.k, indexed), indent=2),
+            encoding="utf-8",
         )
         print(f"\nWrote {args.output}", file=sys.stderr)
 

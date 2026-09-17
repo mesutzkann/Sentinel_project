@@ -127,6 +127,15 @@ rather than ignored, for the same reason `datasets/routing/benchmark.json` is �
 should show real numbers, and a chart with nothing behind it teaches nobody what the system is
 worth.
 
+**Two `rag.json` files are comparable only if they carry the same corpus.** The generated
+postmortems grow it — one per concluded demo run — and a document no query labels cannot be
+counted correct while still taking a slot, so recall falls without anything about retrieval
+having changed. `rag.json` records `corpus_documents` and `unlabelled_documents` for exactly this
+question; where they differ, the difference between the runs is the corpus, not the retriever.
+`20260916T125538Z` is such a run — 33 documents, 5 of them the agent's own — and its rag numbers
+are below `20260914T145821Z` for that reason. Reindex from `datasets/knowledge/` without
+`postmortems/` before a run that is meant to be compared.
+
 ## The same fixtures, two different benchmarks
 
 `reasoning/*.json` is read by **two** evaluators, and the difference between them is the whole

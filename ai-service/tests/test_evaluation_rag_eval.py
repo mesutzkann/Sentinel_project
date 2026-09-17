@@ -19,12 +19,16 @@ from pathlib import Path
 import pytest
 
 from agents.postmortem import GENERATED_DIR
+from evaluation.metrics import QueryOutcome
 from evaluation.rag_eval import (
     DEFAULT_QUERIES,
     EvalError,
+    EvalQuery,
+    as_json,
     check_labels,
     document_keys,
     load_queries,
+    unlabelled_documents,
 )
 from rag.documents import RetrievedChunk, SourceType, StoredChunk
 
@@ -122,6 +126,53 @@ def test_a_label_the_index_does_not_have_stops_the_run() -> None:
 
     with pytest.raises(EvalError, match="not in the index"):
         check_labels(queries, indexed={"runbooks/connection-pool-exhaustion.md"})
+
+
+# --------------------------------------------------- the corpus that was measured ----
+
+
+def test_a_document_no_query_labels_is_reported_and_does_not_stop_the_run() -> None:
+    """The mirror of the check above, and deliberately not an error.
+
+    A postmortem the agent wrote is a real document that a real search has to beat; deleting it
+    to keep the benchmark tidy would measure a corpus nobody has. It can never be counted
+    correct, though, so it is reported — the run is comparable only with one over the same
+    corpus.
+    """
+    queries = [EvalQuery(id="Q001", query="pool", relevant_documents=["runbooks/pool.md"])]
+    indexed = {"runbooks/pool.md", "postmortems/INC-00042.md"}
+
+    check_labels(queries, indexed)
+
+    assert unlabelled_documents(queries, indexed) == ["postmortems/INC-00042.md"]
+
+
+def test_an_index_the_queries_cover_reports_nothing() -> None:
+    queries = [EvalQuery(id="Q001", query="pool", relevant_documents=["runbooks/pool.md"])]
+
+    assert unlabelled_documents(queries, {"runbooks/pool.md"}) == []
+
+
+def test_the_run_record_says_what_corpus_it_was_measured_against() -> None:
+    """Two runs of the same queries through the same code differed on every reranked figure,
+    and what had changed was the corpus. The record now answers that without a rerun."""
+    queries = [EvalQuery(id="Q001", query="pool", relevant_documents=["runbooks/pool.md"])]
+    outcomes = {
+        "vector": [
+            QueryOutcome(
+                query_id="Q001",
+                query="pool",
+                retriever="vector",
+                retrieved=["runbooks/pool.md"],
+                relevant=["runbooks/pool.md"],
+            )
+        ]
+    }
+
+    record = as_json(outcomes, [], queries, k=5, indexed={"runbooks/pool.md", "grown.md"})
+
+    assert record["corpus_documents"] == 2
+    assert record["unlabelled_documents"] == ["grown.md"]
 
 
 # -------------------------------------------------------- chunks to documents ----
