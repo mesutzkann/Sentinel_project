@@ -93,10 +93,12 @@ class McpClient:
         try:
             async with asyncio.timeout(self._timeout):
                 # mcp 2.x yields two streams, not three.
-                async with streamable_http_client(url) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        response = await session.call_tool(tool.name, arguments)
+                async with (
+                    streamable_http_client(url) as (read, write),
+                    ClientSession(read, write) as session,
+                ):
+                    await session.initialize()
+                    response = await session.call_tool(tool.name, arguments)
         except TimeoutError:
             return self._measured(
                 ToolCallResult(

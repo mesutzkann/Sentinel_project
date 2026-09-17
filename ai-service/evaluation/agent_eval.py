@@ -648,12 +648,14 @@ async def container_memory_mib(service: str) -> float | None:
     """
     try:
         async with asyncio.timeout(15):
-            async with streamable_http_client(DOCKER_MCP_URL) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    response = await session.call_tool(
-                        "get_container_stats", {"name": f"{CONTAINER_PREFIX}{service}"}
-                    )
+            async with (
+                streamable_http_client(DOCKER_MCP_URL) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                response = await session.call_tool(
+                    "get_container_stats", {"name": f"{CONTAINER_PREFIX}{service}"}
+                )
     except Exception as exc:  # noqa: BLE001 - an instrument that is unavailable is not a failure
         logger.warning("could not read container memory for %s: %s", service, exc)
         return None

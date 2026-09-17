@@ -144,10 +144,12 @@ class McpToolRegistry:
         try:
             async with asyncio.timeout(self._timeout):
                 # mcp 2.x yields two streams, not three.
-                async with streamable_http_client(server.url) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        listed = await session.list_tools()
+                async with (
+                    streamable_http_client(server.url) as (read, write),
+                    ClientSession(read, write) as session,
+                ):
+                    await session.initialize()
+                    listed = await session.list_tools()
         except Exception as exc:  # noqa: BLE001 - one server's failure must not end discovery
             reason = _describe(exc)
             logger.warning("%s at %s is unreachable: %s", server.name, server.url, reason)
