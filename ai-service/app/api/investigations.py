@@ -51,6 +51,7 @@ from mcp_client.registry import McpToolRegistry
 from rag.memory import IncidentMemory
 from rag.retrievers import Retriever
 from rag.similarity import IncidentSimilarity
+from reporting.predictions import PredictionReporter
 from routing.factory import build_router
 
 logger = logging.getLogger(__name__)
@@ -131,11 +132,19 @@ class InvestigationService:
         )
         self._router = build_router(config)
 
+        # One reporter for the process. It holds no connection — every record opens its own
+        # client — and it is disabled rather than absent when the backend token is not set, so
+        # the agent runs the same way on a machine that has no backend to report to.
+        self._reporter = PredictionReporter(
+            base_url=config.backend_base_url,
+            internal_token=config.internal_api_key,
+        )
+
         # Its own writer rather than a node in the machine. The postmortem is written after the
         # investigation has ended and reported, so it cannot be a state the runner has to pass
         # through — and Phase 10 will want to write it again after a fix has been verified,
         # which is a second call to the same object rather than a second visit to a state.
-        self._writer = PostmortemWriter(self._provider)
+        self._writer = PostmortemWriter(self._provider, reporter=self._reporter)
 
     def get(self, investigation_id: str) -> RunRecord | None:
         return self._runs.get(investigation_id)
@@ -189,6 +198,7 @@ class InvestigationService:
                 retriever=await self._retriever(),
                 router=self._router,
                 similarity=await self._similarity(),
+                reporter=self._reporter,
                 emit=emit,
             )
         except Exception as exc:  # noqa: BLE001 - reported as a failed investigation, not a crash

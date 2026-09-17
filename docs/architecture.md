@@ -69,9 +69,10 @@ One instance so there is one thing to back up and one to start. Separate schemas
 `database-mcp` can attribute a slow query, a lock or connection pressure to a *service* —
 without that attribution, chaos scenarios 1, 2, 3 and 4 look identical from the database side.
 
-**Neither application writes to the other's schema.** The AI service records every model call,
-but `model_predictions` is a `sentinel` table, so it reports over the backend's `/internal` API
-and the backend stores it. That is one more hop than writing the row directly, and it keeps the
+**Neither application writes to the other's schema.** The AI service records every model call it
+makes for an investigation — the `/llm` endpoint, the reasoning nodes, the critic and the
+postmortem writer — but `model_predictions` is a `sentinel` table, so it reports over the
+backend's `/internal` API and the backend stores it. That is one more hop than writing the row directly, and it keeps the
 rule that a schema has exactly one writer.
 
 ### Callbacks, not a queue

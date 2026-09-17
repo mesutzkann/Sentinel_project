@@ -3,18 +3,34 @@
 The AI service owns the ``rag`` schema and the backend owns ``sentinel``; neither writes to the
 other's. ``model_predictions`` is a ``sentinel`` table, so the service that makes the call
 reports it over HTTP and the service that owns the table stores it.
+
+**Who reports.** The ``/llm`` endpoint, the agent's four reasoning nodes (REASONING, and
+VALIDATION for the critic) and the postmortem writer. Not the router: its calls happen before an
+investigation has a plan and :meth:`routing.base.Router.route` is handed no investigation id, so
+its rows would arrive unattached — and the router is the one call on the critical path whose
+latency is itself the number being worked on. Its cost is measured by the Phase 8 benchmark
+instead, which times the model rather than the report.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import httpx
 
+from llm.structured import StructuredAttempt, StructuredResult
+
 logger = logging.getLogger(__name__)
+
+# How much of a model's *unusable* answer is kept on the row: enough to read what it said when a
+# conclusion looks wrong, short enough that a model which rambled to the end of its context does
+# not write a page per failed call. An answer that validated is stored whole — the column is
+# `jsonb`, and a JSON object cut off at 4000 characters is no longer JSON.
+OUTPUT_CHARS = 4000
 
 
 class ModelPurpose(StrEnum):
@@ -50,6 +66,62 @@ class PredictionRecord:
             "valid_json": self.valid_json,
             "output": self.output,
         }
+
+    @classmethod
+    def from_attempts(
+        cls,
+        attempts: Sequence[StructuredAttempt],
+        *,
+        purpose: ModelPurpose,
+        valid_json: bool,
+        output: str | None,
+        investigation_id: str | None = None,
+    ) -> PredictionRecord:
+        """One row for one structured call, repair attempts folded in.
+
+        A call that needed two repairs cost three round trips and the caller waited for all of
+        them, so the row carries their sum. It is deliberately not three rows: the thing the
+        dashboard divides by is calls, and splitting them would make a model that retries look
+        cheaper per call than one that gets it right first time.
+        """
+        if not attempts:
+            raise ValueError("a prediction record needs at least one attempt")
+
+        if output is not None and not valid_json:
+            output = output[:OUTPUT_CHARS]
+
+        return cls(
+            model_name=attempts[-1].completion.model,
+            purpose=purpose,
+            prompt_tokens=sum(a.completion.prompt_tokens for a in attempts),
+            completion_tokens=sum(a.completion.completion_tokens for a in attempts),
+            latency_ms=sum(a.completion.latency_ms for a in attempts),
+            valid_json=valid_json,
+            output=output,
+            investigation_id=investigation_id,
+        )
+
+    @classmethod
+    def from_result(
+        cls,
+        result: StructuredResult[Any],
+        *,
+        purpose: ModelPurpose,
+        investigation_id: str | None = None,
+    ) -> PredictionRecord:
+        """The row for a call that ended in a valid object.
+
+        The parsed object is stored rather than the raw text: the text of the last attempt is the
+        same thing plus whatever fence the model wrapped it in, and the failures are the rows
+        where the exact bytes matter.
+        """
+        return cls.from_attempts(
+            result.attempts,
+            purpose=purpose,
+            valid_json=True,
+            output=result.value.model_dump_json(),
+            investigation_id=investigation_id,
+        )
 
 
 class PredictionReporter:

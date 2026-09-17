@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from agents.context import EvidenceItem, EvidenceSource, InvestigationContext
 from llm.base import LlmCompletion, LlmMessage, LlmOptions, LocalLlmProvider
+from reporting.predictions import PredictionRecord, PredictionReporter
 
 
 class ScriptedProvider(LocalLlmProvider):
@@ -62,6 +63,24 @@ class ScriptedProvider(LocalLlmProvider):
         )
 
     async def is_available(self) -> bool:
+        return True
+
+
+class RecordingReporter(PredictionReporter):
+    """Captures records instead of posting them.
+
+    A real base class rather than a stand-in object, so a test cannot pass while the caller holds
+    something the runner would never hand it. The URL and token are fake and unused — ``record``
+    is overridden before either is read.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(base_url="http://backend", internal_token="test")
+        self.records: list[PredictionRecord] = []
+
+    async def record(self, record: PredictionRecord) -> bool:
+        self.records.append(record)
+
         return True
 
 

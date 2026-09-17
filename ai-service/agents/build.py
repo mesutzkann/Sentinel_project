@@ -45,6 +45,7 @@ from llm.base import LocalLlmProvider
 from mcp_client.client import McpClient
 from rag.retrievers import Retriever
 from rag.similarity import IncidentSimilarity
+from reporting.predictions import PredictionReporter
 from routing.base import Router
 
 
@@ -68,6 +69,7 @@ def build_nodes(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
     similarity: IncidentSimilarity | None = None,
+    reporter: PredictionReporter | None = None,
 ) -> dict[State, Node]:
     """One node per non-terminal state.
 
@@ -76,8 +78,18 @@ def build_nodes(
     produce a number that belongs to neither version. Left as ``None`` — the normal case — each
     node uses its own current default, and those move independently because prompts are improved
     one at a time.
+
+    ``reporter`` is what puts the agent's model calls in ``model_predictions`` beside the ones
+    the ``/llm`` endpoint makes. It is passed to every reasoning node at once rather than to a
+    chosen few: the dashboard reports cost per purpose, and a build where one node reported and
+    the others did not would understate reasoning by however many nodes were missed. ``None``
+    — the benchmarks and the tests — records nothing.
     """
-    reasoning = {"prompt_version": prompt_version, "max_attempts": max_attempts}
+    reasoning = {
+        "prompt_version": prompt_version,
+        "max_attempts": max_attempts,
+        "reporter": reporter,
+    }
 
     nodes: list[Node] = [
         UnderstandIncidentNode(),
@@ -131,6 +143,7 @@ def build_machine(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     history_documents: int = DEFAULT_DOCUMENTS,
     similarity: IncidentSimilarity | None = None,
+    reporter: PredictionReporter | None = None,
     max_transitions: int = DEFAULT_MAX_TRANSITIONS,
 ) -> StateMachine:
     """The whole agent, ready to run one investigation.
@@ -150,6 +163,7 @@ def build_machine(
             max_attempts=max_attempts,
             history_documents=history_documents,
             similarity=similarity,
+            reporter=reporter,
         ),
         emit=emit,
         max_transitions=max_transitions,

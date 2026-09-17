@@ -33,8 +33,14 @@ from agents.context import InvestigationContext
 from agents.nodes.reasoning import DEFAULT_MAX_ATTEMPTS, render_evidence, render_incident
 from llm.base import LlmMessage, LlmOptions, LocalLlmProvider
 from llm.prompts import PromptRegistry, registry
-from llm.structured import StructuredOutputError, generate_structured, json_schema_hint
+from llm.structured import (
+    StructuredAttempt,
+    StructuredOutputError,
+    generate_structured,
+    json_schema_hint,
+)
 from rag.documents import Document, SourceType
+from reporting.predictions import ModelPurpose, PredictionRecord, PredictionReporter
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +133,13 @@ class PostmortemWriter:
         prompt_version: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         prompts: PromptRegistry | None = None,
+        reporter: PredictionReporter | None = None,
     ) -> None:
         self._provider = provider
         self._prompt_version = prompt_version or self.default_prompt_version
         self._max_attempts = max_attempts
         self._prompts = prompts or registry()
+        self._reporter = reporter
 
     @property
     def prompt_id(self) -> str:
@@ -179,8 +187,21 @@ class PostmortemWriter:
                 ctx.incident_code,
                 len(exc.attempts),
             )
+            await self._report(
+                ctx,
+                exc.attempts,
+                valid_json=False,
+                output=exc.attempts[-1].completion.text if exc.attempts else None,
+            )
 
             return None
+
+        await self._report(
+            ctx,
+            result.attempts,
+            valid_json=True,
+            output=result.value.model_dump_json(),
+        )
 
         return build(
             ctx,
@@ -192,6 +213,34 @@ class PostmortemWriter:
                 "completion_tokens": result.total_completion_tokens,
                 "latency_ms": result.total_latency_ms,
             },
+        )
+
+    async def _report(
+        self,
+        ctx: InvestigationContext,
+        attempts: list[StructuredAttempt],
+        *,
+        valid_json: bool,
+        output: str | None,
+    ) -> None:
+        """Record the write-up call under POSTMORTEM.
+
+        Its own purpose rather than REASONING, because this call is not part of the
+        investigation: it happens after the run has ended and its cost is what the memory in
+        Phase 9 charges per incident. Folding it into reasoning would make every run look more
+        expensive to think through than it was.
+        """
+        if self._reporter is None or not attempts:
+            return
+
+        await self._reporter.record(
+            PredictionRecord.from_attempts(
+                attempts,
+                purpose=ModelPurpose.POSTMORTEM,
+                valid_json=valid_json,
+                output=output,
+                investigation_id=ctx.investigation_id,
+            )
         )
 
 

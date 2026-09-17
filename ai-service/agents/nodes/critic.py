@@ -73,6 +73,7 @@ from agents.schemas import CriticVerdict
 from agents.state_machine import AgentEvent, EventType, Transition
 from agents.states import State
 from llm.structured import StructuredOutputError
+from reporting.predictions import ModelPurpose
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,11 @@ class ValidateNode(ReasoningNode):
     # v1 is kept because it is what the 3B and 7B numbers in docs were measured against, and it
     # is the thing v2 has to beat. See the module docstring for what it got wrong.
     default_prompt_version = "v2"
+
+    # Not REASONING. The critic is the call that decides whether the run stops for a human, and
+    # its cost moves on its own — a rejected conclusion is validated twice while the four
+    # thinking calls happen once each.
+    purpose = ModelPurpose.VALIDATION
 
     @property
     def state(self) -> State:

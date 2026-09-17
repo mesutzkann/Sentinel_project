@@ -180,7 +180,7 @@ async def structured(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     except StructuredOutputError as exc:
-        await _record_failure(reporter, request, exc, provider.model)
+        await _record_failure(reporter, request, exc)
 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -193,14 +193,9 @@ async def structured(
         ) from exc
 
     recorded = await reporter.record(
-        PredictionRecord(
-            model_name=result.completion.model,
+        PredictionRecord.from_result(
+            result,
             purpose=request.purpose,
-            prompt_tokens=result.total_prompt_tokens,
-            completion_tokens=result.total_completion_tokens,
-            latency_ms=result.total_latency_ms,
-            valid_json=True,
-            output=result.value.model_dump_json(),
             investigation_id=request.investigation_id,
         )
     )
@@ -330,21 +325,17 @@ async def _record_failure(
     reporter: PredictionReporter,
     request: StructuredRequest,
     error: StructuredOutputError,
-    model: str,
 ) -> None:
     """Records a call that never validated, so failures are visible in the same table."""
     if not error.attempts:
         return
 
     await reporter.record(
-        PredictionRecord(
-            model_name=model,
+        PredictionRecord.from_attempts(
+            error.attempts,
             purpose=request.purpose,
-            prompt_tokens=sum(a.completion.prompt_tokens for a in error.attempts),
-            completion_tokens=sum(a.completion.completion_tokens for a in error.attempts),
-            latency_ms=sum(a.completion.latency_ms for a in error.attempts),
             valid_json=False,
-            output=error.attempts[-1].completion.text[:4000],
+            output=error.attempts[-1].completion.text,
             investigation_id=request.investigation_id,
         )
     )

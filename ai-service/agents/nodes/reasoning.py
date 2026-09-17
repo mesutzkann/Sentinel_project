@@ -30,11 +30,13 @@ from agents.states import State
 from llm.base import LlmMessage, LlmOptions, LocalLlmProvider
 from llm.prompts import PromptRegistry, registry
 from llm.structured import (
+    StructuredAttempt,
     StructuredOutputError,
     StructuredResult,
     generate_structured,
     json_schema_hint,
 )
+from reporting.predictions import ModelPurpose, PredictionRecord, PredictionReporter
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +123,11 @@ class ReasoningNode(Node):
     #: measured and rejected correct conclusions, and that says nothing about the other four.
     default_prompt_version: str = "v1"
 
+    #: What ``model_predictions`` files this node's calls under. Thinking is REASONING; the
+    #: critic overrides it, because "what did validation cost" is a question asked on its own —
+    #: it is the call that runs twice on a disputed conclusion.
+    purpose: ModelPurpose = ModelPurpose.REASONING
+
     def __init__(
         self,
         provider: LocalLlmProvider,
@@ -128,11 +135,17 @@ class ReasoningNode(Node):
         prompt_version: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         prompts: PromptRegistry | None = None,
+        reporter: PredictionReporter | None = None,
     ) -> None:
         self._provider = provider
         self._prompt_version = prompt_version or self.default_prompt_version
         self._max_attempts = max_attempts
         self._prompts = prompts or registry()
+
+        # None in every test and every benchmark: a row in the backend's table is about a real
+        # investigation, and a scripted provider answering a unit test is not one. The runner
+        # passes a reporter, `evaluation/` does not.
+        self._reporter = reporter
 
     @property
     def prompt_id(self) -> str:
@@ -177,6 +190,12 @@ class ReasoningNode(Node):
                 completion_tokens=sum(a.completion.completion_tokens for a in exc.attempts),
                 calls=len(exc.attempts),
             )
+            await self._report(
+                ctx,
+                exc.attempts,
+                valid_json=False,
+                output=exc.attempts[-1].completion.text if exc.attempts else None,
+            )
             raise
 
         ctx.record_llm(
@@ -184,8 +203,49 @@ class ReasoningNode(Node):
             completion_tokens=result.total_completion_tokens,
             calls=len(result.attempts),
         )
+        await self._report(
+            ctx,
+            result.attempts,
+            valid_json=True,
+            output=result.value.model_dump_json(),
+        )
 
         return result
+
+    async def _report(
+        self,
+        ctx: InvestigationContext,
+        attempts: list[StructuredAttempt],
+        *,
+        valid_json: bool,
+        output: str | None,
+    ) -> None:
+        """Write the call to ``model_predictions``, where the dashboard reports cost per purpose.
+
+        The context counts tokens for the investigation's own row; this is the per-call table,
+        and the two are not the same report — one answers "what did this run cost", the other
+        "what does validation cost, across every run, on this model".
+
+        Failures are reported too, and they are the point: a call that never produced valid JSON
+        is what the structured-output success rate is computed from, and a table that held only
+        the successes would put that rate at 1.0 by construction.
+
+        Awaited rather than fired into a task. It is a local HTTP POST against a call that took
+        seconds, and a task nobody awaits can outlive the run that made it — which is how a
+        prediction row ends up attached to an investigation the backend has already closed.
+        """
+        if self._reporter is None or not attempts:
+            return
+
+        await self._reporter.record(
+            PredictionRecord.from_attempts(
+                attempts,
+                purpose=self.purpose,
+                valid_json=valid_json,
+                output=output,
+                investigation_id=ctx.investigation_id,
+            )
+        )
 
     def stalled(
         self,

@@ -238,6 +238,13 @@ that never produced valid JSON. The AI service does not write that table: it own
 schema, the backend owns `sentinel`, so it reports over the backend's `/internal` API and the
 backend stores it. Both processes read one `INTERNAL_API_KEY`.
 
+An investigation's own calls are recorded the same way, under the purpose that made them —
+`reasoning` for the four thinking nodes, `validation` for the critic, `postmortem` for the
+write-up afterwards. The router is the exception: it runs before the investigation has a plan
+and is handed no investigation id, so its cost is measured by the routing benchmark rather than
+reported per call. A repair loop is one row carrying the sum of its attempts, which is what the
+caller actually waited for.
+
 ## MCP tools
 
 Everything the agent can learn about the running system — and everything it can change about it —

@@ -17,7 +17,7 @@ from mcp_client.policy import ApprovalVerifier, McpPolicy
 from mcp_client.registry import McpServerConfig, McpToolRegistry
 from rag.retrievers import Retriever
 from routing.rule_router import RuleBasedRouter
-from tests.support import ScriptedProvider
+from tests.support import RecordingReporter, ScriptedProvider
 
 
 class NoResults(Retriever):
@@ -31,7 +31,7 @@ class NoResults(Retriever):
         raise AssertionError("building the machine must not search anything")
 
 
-def nodes() -> dict[State, object]:
+def nodes(**overrides: object) -> dict[State, object]:
     registry = McpToolRegistry([McpServerConfig("logs-mcp", "http://localhost:7001/mcp")])
 
     return build_nodes(
@@ -43,6 +43,7 @@ def nodes() -> dict[State, object]:
         ),
         retriever=NoResults(),
         router=RuleBasedRouter(),
+        **overrides,  # type: ignore[arg-type]
     )
 
 
@@ -72,6 +73,19 @@ def test_a_registry_with_a_hole_in_it_is_refused() -> None:
 def test_a_terminal_state_needs_no_node() -> None:
     """COMPLETED, NEEDS_HUMAN and FAILED are where the run stops, not work to be done."""
     assert not set(nodes()) & TERMINAL_STATES
+
+
+def test_every_node_that_calls_a_model_gets_the_reporter() -> None:
+    """All of them or none. A build where one node reported would understate every purpose."""
+    reporter = RecordingReporter()
+    thinking = [
+        node
+        for node in nodes(reporter=reporter).values()
+        if hasattr(node, "prompt_name") and node.prompt_name  # type: ignore[attr-defined]
+    ]
+
+    assert len(thinking) == 4
+    assert all(node._reporter is reporter for node in thinking)  # noqa: SLF001 - the wiring is the test
 
 
 def test_the_machine_builds_and_starts_where_the_happy_path_does() -> None:

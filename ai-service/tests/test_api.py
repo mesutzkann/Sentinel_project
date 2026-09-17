@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from app.api import llm as llm_api
 from app.main import app
 from llm.base import LlmCompletion, LlmMessage, LlmOptions, LlmUnavailableError, LocalLlmProvider
-from reporting.predictions import PredictionRecord, PredictionReporter
+from tests.support import RecordingReporter
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -60,18 +60,6 @@ class UnavailableProvider(StubProvider):
 
     async def is_available(self) -> bool:
         return False
-
-
-class RecordingReporter(PredictionReporter):
-    """Captures records instead of posting them."""
-
-    def __init__(self) -> None:
-        super().__init__(base_url="http://backend", internal_token="test")
-        self.records: list[PredictionRecord] = []
-
-    async def record(self, record: PredictionRecord) -> bool:
-        self.records.append(record)
-        return True
 
 
 @pytest.fixture
